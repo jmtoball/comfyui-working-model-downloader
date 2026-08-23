@@ -1,0 +1,122 @@
+{
+  "workflow": {
+    "last_node_id": 6,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "MarkdownNote",
+        "widgets_values": [
+          "# FLUX portrait workflow\n\n## Required models\n\n- UNET: [flux1-dev.safetensors](https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main/split_files/diffusion_models/flux1-dev.safetensors)\n- VAE: https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main/split_files/vae/ae.safetensors\n- Style LoRA: https://civitai.com/models/1234?modelVersionId=5678\n  (save it as `paper-cut.safetensors`)\n\nTutorial: https://example.com/how-to\n"
+        ]
+      },
+      {
+        "id": 2,
+        "type": "UNETLoader",
+        "widgets_values": [
+          "flux1-dev.safetensors",
+          "default"
+        ]
+      },
+      {
+        "id": 3,
+        "type": "VAELoader",
+        "widgets_values": [
+          "ae.safetensors"
+        ]
+      },
+      {
+        "id": 4,
+        "type": "LoraLoaderModelOnly",
+        "widgets_values": [
+          "paper-cut.safetensors",
+          1.0
+        ]
+      },
+      {
+        "id": 5,
+        "type": "KSampler",
+        "widgets_values": [
+          0,
+          "randomize",
+          20,
+          1.0,
+          "euler",
+          "normal",
+          1.0
+        ]
+      },
+      {
+        "id": 6,
+        "type": "SaveImage",
+        "widgets_values": [
+          "ComfyUI"
+        ]
+      },
+      {
+        "id": 7,
+        "type": "VAEDecode",
+        "widgets_values": []
+      }
+    ]
+  },
+  "prompt": {
+    "2": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "flux1-dev.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    "3": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "ae.safetensors"
+      }
+    },
+    "4": {
+      "class_type": "LoraLoaderModelOnly",
+      "inputs": {
+        "lora_name": "paper-cut.safetensors",
+        "strength_model": 1.0,
+        "model": [
+          "2",
+          0
+        ]
+      }
+    },
+    "5": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "4",
+          0
+        ],
+        "seed": 0,
+        "steps": 20
+      }
+    },
+    "6": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": [
+          "7",
+          0
+        ],
+        "filename_prefix": "ComfyUI"
+      }
+    },
+    "7": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "5",
+          0
+        ],
+        "vae": [
+          "3",
+          0
+        ]
+      }
+    }
+  }
+}

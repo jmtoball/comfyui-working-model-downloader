@@ -1,0 +1,8 @@
+[
+  {"type": "file", "path": "split_files/vae/ae.safetensors", "size": 335304388,
+   "lfs": {"oid": "1111111111111111111111111111111111111111111111111111111111111111", "size": 335304388}},
+  {"type": "file", "path": "split_files/diffusion_models/flux1-dev.safetensors", "size": 23802932552,
+   "lfs": {"oid": "2222222222222222222222222222222222222222222222222222222222222222", "size": 23802932552}},
+  {"type": "file", "path": "README.md", "size": 1200},
+  {"type": "directory", "path": "split_files"}
+]

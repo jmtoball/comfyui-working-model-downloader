@@ -1,0 +1,208 @@
+/* Sidebar panel styling. Colours come from ComfyUI's own theme variables so the
+   panel follows whatever theme the user is running, light or dark. */
+
+.wmd-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px;
+  height: 100%;
+  overflow-y: auto;
+  font-size: 12px;
+  color: var(--fg-color, #ddd);
+}
+
+.wmd-panel h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+}
+
+.wmd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wmd-grow {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wmd-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.wmd-row > input,
+.wmd-row > select {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.wmd-panel button {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #444);
+  background: var(--comfy-input-bg, #222);
+  color: inherit;
+  cursor: pointer;
+}
+
+.wmd-panel button:hover:not(:disabled) {
+  border-color: var(--fg-color, #ddd);
+}
+
+.wmd-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.wmd-panel button.wmd-primary {
+  background: var(--p-primary-color, #2d6cdf);
+  border-color: transparent;
+  color: #fff;
+}
+
+.wmd-panel button.wmd-link {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  text-decoration: underline;
+  text-align: left;
+  word-break: break-all;
+}
+
+.wmd-panel input,
+.wmd-panel select,
+.wmd-panel textarea {
+  background: var(--comfy-input-bg, #222);
+  color: inherit;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.wmd-panel textarea {
+  resize: vertical;
+  min-height: 48px;
+}
+
+.wmd-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wmd-panel label.wmd-check {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
+  opacity: 0.85;
+  line-height: 1.35;
+}
+
+.wmd-status {
+  min-height: 16px;
+  opacity: 0.8;
+}
+
+.wmd-error {
+  color: var(--error-text, #e5534b);
+  opacity: 1;
+}
+
+.wmd-muted {
+  opacity: 0.6;
+  line-height: 1.35;
+}
+
+.wmd-results,
+.wmd-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wmd-item,
+.wmd-job {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border-color, #444);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: var(--comfy-menu-bg, #1c1c1c);
+}
+
+.wmd-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wmd-item-name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+/* The border tells you how much to trust the destination at a glance. */
+.wmd-tier-documented,
+.wmd-tier-properties { border-left-color: #3fb950; }
+.wmd-tier-manifest,
+.wmd-tier-manual,
+.wmd-tier-rule { border-left-color: #2d6cdf; }
+.wmd-tier-search { border-left-color: #d29922; }
+.wmd-tier-unresolved { border-left-color: #e5534b; }
+
+.wmd-reason {
+  opacity: 0.75;
+  font-style: italic;
+  line-height: 1.35;
+}
+
+.wmd-badge {
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  background: var(--border-color, #444);
+}
+
+.wmd-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-color, #444);
+}
+
+.wmd-bar {
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--border-color, #444);
+}
+
+.wmd-bar-fill {
+  height: 100%;
+  background: var(--p-primary-color, #2d6cdf);
+  transition: width 0.2s linear;
+}
+
+.wmd-job-done .wmd-bar-fill,
+.wmd-job-present .wmd-bar-fill { background: #3fb950; }
+.wmd-job-error .wmd-bar-fill { background: #e5534b; }
+
+.wmd-panel details > summary {
+  cursor: pointer;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}

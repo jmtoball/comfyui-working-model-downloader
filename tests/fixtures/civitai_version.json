@@ -1,0 +1,29 @@
+{
+  "id": 5678,
+  "modelId": 1234,
+  "name": "v1.0",
+  "baseModel": "SDXL 1.0",
+  "downloadUrl": "https://civitai.com/api/download/models/5678",
+  "model": {"name": "Paper Cut", "type": "LORA", "nsfw": false},
+  "files": [
+    {
+      "name": "paper-cut-preview.png",
+      "type": "Image",
+      "primary": false,
+      "sizeKB": 120.0,
+      "hashes": {}
+    },
+    {
+      "name": "paper-cut.safetensors",
+      "type": "Model",
+      "primary": true,
+      "sizeKB": 149504.0,
+      "metadata": {"format": "SafeTensor", "size": "full", "fp": "fp16"},
+      "downloadUrl": "https://civitai.com/api/download/models/5678",
+      "hashes": {
+        "AutoV2": "ABCDEF1234",
+        "SHA256": "AA11BB22CC33DD44EE55FF6677889900AA11BB22CC33DD44EE55FF6677889900"
+      }
+    }
+  ]
+}
