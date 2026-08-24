@@ -22,7 +22,7 @@ import requests
 from . import comfy_env, download, http, resolve
 from .config import Config
 from .errors import WmdError
-from .models import ManifestEntry, RemoteFile, Resolution
+from .models import PROVIDER_CIVITAI, ManifestEntry, RemoteFile, Resolution
 
 VERSION = 1
 
@@ -164,6 +164,9 @@ def entry_file(entry: ManifestEntry) -> RemoteFile:
         provider=entry.provider,
         size=entry.size,
         sha256=entry.sha256,
+        # A pinned Civitai size came from the same kilobyte-rounded figure, and
+        # the manifest does not record that, so infer it from the provider.
+        size_exact=entry.provider != PROVIDER_CIVITAI,
     )
 
 

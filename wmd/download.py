@@ -49,6 +49,10 @@ _TEXTUAL_TYPES = ("text/html", "application/json", "application/xml")
 # No model weights file is this small; a body this size is a message.
 _MESSAGE_SIZE = 4096
 
+# How far an inexact advertised size may be out. A figure published in kilobytes
+# cannot be wrong by a whole kilobyte or more once converted back.
+_SIZE_TOLERANCE = 1024
+
 ProgressCallback = Callable[[int, "int | None"], None]
 
 
@@ -190,7 +194,7 @@ def download(
 
     if os.path.isfile(dest_path) and not overwrite:
         size = os.path.getsize(dest_path)
-        if file.size is None or size == file.size:
+        if size_matches(size, file):
             return Outcome(path=dest_path, status="present", size=size)
 
     if file.size and _free_space(dest_path) < file.size * 1.02:
@@ -242,10 +246,12 @@ def download(
 
             _reject_textual_body(response, file.filename)
 
+            # Content-Length describes this very transfer, so it beats whatever
+            # the catalogue said -- and unlike a kilobyte-rounded figure it is
+            # exact, which is what deciding "ended early" needs.
             declared = response.headers.get("Content-Length")
-            total = file.size
-            if total is None and declared and declared.isdigit():
-                total = int(declared) + offset
+            served = int(declared) + offset if declared and declared.isdigit() else None
+            total = served if served is not None else file.size
 
             digest = hashlib.sha256() if verify else None
             if digest is not None and offset:
@@ -274,7 +280,14 @@ def download(
                 time.sleep(min(16.0, 2.0**attempt))
                 continue
 
-        if total is not None and downloaded < total:
+        # Only the server's own figure is trustworthy enough to call a transfer
+        # short; an advertised size that is a kilobyte out would retry forever.
+        short = (
+            downloaded < served
+            if served is not None
+            else total is not None and not size_matches(downloaded, file)
+        )
+        if short:
             last_error = DownloadFailed(
                 f"{file.filename} ended early ({downloaded} of {total} bytes)"
             )
@@ -289,6 +302,20 @@ def download(
     raise DownloadFailed(f"could not download {file.filename}: {last_error}")
 
 
+def size_matches(actual: int, file: RemoteFile) -> bool:
+    """Whether ``actual`` agrees with the size the source advertised.
+
+    An inexact size is allowed to differ by up to a kilobyte, which is the most a
+    kilobyte-rounded figure can be out by. Holding it to the byte discards
+    perfectly good files.
+    """
+    if file.size is None:
+        return True
+    if file.size_exact:
+        return actual == file.size
+    return abs(actual - file.size) <= _SIZE_TOLERANCE
+
+
 def _finalize(
     file: RemoteFile,
     part: str,
@@ -297,15 +324,13 @@ def _finalize(
     verify: bool,
 ) -> Outcome:
     size = os.path.getsize(part)
-    if file.size is not None and size != file.size:
-        _discard(part)
-        raise DownloadFailed(
-            f"{file.filename} is {size} bytes but should be {file.size}; discarded"
-        )
 
     actual: str | None = None
     verified = False
     if verify and file.sha256:
+        # The checksum settles it. Checking the advertised size first -- and
+        # discarding on a mismatch -- would throw away a file the hash proves is
+        # byte-for-byte correct, which is exactly what a rounded size causes.
         actual = (digest.hexdigest() if digest is not None else _hash_existing(part).hexdigest())
         if actual.lower() != file.sha256.lower():
             broken = dest_path + ".bad"
@@ -314,8 +339,15 @@ def _finalize(
                 f"{file.filename} failed its checksum; kept the download at {broken}"
             )
         verified = True
-    elif digest is not None:
-        actual = digest.hexdigest()
+    else:
+        # No checksum to appeal to, so the size is all we have.
+        if not size_matches(size, file):
+            _discard(part)
+            raise DownloadFailed(
+                f"{file.filename} is {size} bytes but should be {file.size}; discarded"
+            )
+        if digest is not None:
+            actual = digest.hexdigest()
 
     os.replace(part, dest_path)
     return Outcome(path=dest_path, status="downloaded", size=size, sha256=actual, verified=verified)

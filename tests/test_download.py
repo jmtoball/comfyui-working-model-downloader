@@ -15,7 +15,7 @@ import responses
 
 from wmd import download, http
 from wmd.errors import AuthRequired, DownloadFailed
-from wmd.models import RemoteFile
+from wmd.models import ModelRef, RemoteFile
 
 URL = "https://huggingface.co/org/repo/resolve/main/model.safetensors"
 BODY = b"weights" * 1000
@@ -268,3 +268,109 @@ def test_tokens_never_appear_in_a_download_url(cfg):
     cfg.civitai_api_key = "civitai_secret"
     headers = download.auth_headers("civitai", cfg)
     assert headers == {"Authorization": "Bearer civitai_secret"}
+
+
+# -- sizes that cannot be trusted to the byte --------------------------------
+#
+# Civitai publishes file sizes in kilobytes with limited precision, so converting
+# back cannot reproduce the byte count: 13175664.47851562 * 1024 is
+# 13491880425.99999, one byte short of the real 13491880426.
+
+
+def civitai_file(**kwargs):
+    defaults = {
+        "url": "https://civitai.com/api/download/models/5678",
+        "filename": "model.safetensors",
+        "provider": "civitai",
+        "size": len(BODY) - 1,          # the rounded, slightly-wrong figure
+        "size_exact": False,
+        "sha256": hashlib.sha256(BODY).hexdigest(),
+    }
+    defaults.update(kwargs)
+    return RemoteFile(**defaults)
+
+
+def test_a_kilobyte_rounded_size_is_reconstructed_by_rounding(cfg):
+    """The reported failure, at the point it is introduced."""
+    from wmd.providers.civitai import PROVIDER
+
+    # The exact figure Civitai serves for amazingReality_v10Int8Convrot.safetensors:
+    # clipped to 14 significant digits, so it cannot round-trip to the byte.
+    version = {
+        "id": 5678,
+        "modelId": 1,
+        "model": {"name": "x", "type": "Checkpoint"},
+        "files": [{"name": "a.safetensors", "primary": True, "sizeKB": 13175664.47851562}],
+    }
+    file = PROVIDER._to_file(version, version["files"][0], ModelRef(raw="", provider="civitai"))
+    assert file.size == 13491880426          # truncating would give ...425
+    assert file.size_exact is False
+
+
+@responses.activate
+def test_a_checksum_that_matches_settles_a_size_that_does_not(dest, cfg):
+    """A 13GB file was discarded over one byte while its hash proved it correct."""
+    responses.add(responses.GET, "https://civitai.com/api/download/models/5678", body=BODY, status=200)
+    outcome = download.download(civitai_file(), dest, cfg=cfg)
+    assert outcome.status == "downloaded"
+    assert outcome.verified is True
+    assert open(dest, "rb").read() == BODY
+
+
+@responses.activate
+def test_an_inexact_size_is_allowed_to_be_a_little_out(dest, cfg):
+    responses.add(responses.GET, "https://civitai.com/api/download/models/5678", body=BODY, status=200)
+    outcome = download.download(civitai_file(sha256=None), dest, cfg=cfg)
+    assert outcome.status == "downloaded"
+
+
+@responses.activate
+def test_an_inexact_size_that_is_wildly_out_is_still_refused(dest, cfg):
+    responses.add(responses.GET, "https://civitai.com/api/download/models/5678", body=BODY, status=200)
+    with pytest.raises(DownloadFailed, match="should be"):
+        download.download(civitai_file(sha256=None, size=len(BODY) + 50_000), dest, cfg=cfg)
+    assert not os.path.exists(dest)
+
+
+@responses.activate
+def test_an_exact_size_is_still_held_to_the_byte(dest, cfg):
+    """HuggingFace reports real byte counts, so a mismatch there is a real fault."""
+    responses.add(responses.GET, URL, body=BODY, status=200)
+    with pytest.raises(DownloadFailed, match="should be"):
+        download.download(make_file(size=len(BODY) - 1, sha256=None), dest, cfg=cfg)
+
+
+def test_a_file_already_on_disk_is_recognised_despite_a_rounded_size(dest, cfg):
+    """Otherwise every run downloads it again, and discards it again."""
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "wb") as handle:
+        handle.write(BODY)
+    assert download.download(civitai_file(), dest, cfg=cfg).status == "present"
+
+
+@responses.activate
+def test_the_servers_own_length_decides_whether_a_transfer_ended_early(dest, cfg):
+    """Content-Length describes this transfer; a catalogue figure does not."""
+    responses.add(
+        responses.GET,
+        "https://civitai.com/api/download/models/5678",
+        body=BODY,
+        status=200,
+        headers={"Content-Length": str(len(BODY))},
+    )
+    assert download.download(civitai_file(sha256=None), dest, cfg=cfg).status == "downloaded"
+    assert len(responses.calls) == 1          # no pointless retries
+
+
+def test_size_matching_rules():
+    exact = RemoteFile(url="u", filename="f", size=1000)
+    assert download.size_matches(1000, exact)
+    assert not download.size_matches(1001, exact)
+
+    rounded = RemoteFile(url="u", filename="f", size=1000, size_exact=False)
+    assert download.size_matches(1001, rounded)
+    assert download.size_matches(1000 - 1024, rounded)
+    assert not download.size_matches(1000 + 1025, rounded)
+
+    unknown = RemoteFile(url="u", filename="f", size=None)
+    assert download.size_matches(12345, unknown)

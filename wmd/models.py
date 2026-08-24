@@ -129,6 +129,10 @@ class RemoteFile:
     provider: str = PROVIDER_DIRECT
     size: int | None = None
     sha256: str | None = None
+    # Whether ``size`` is the exact byte count. Civitai publishes sizes in
+    # kilobytes with limited precision, so converting back cannot reproduce the
+    # byte count and the value is only good enough for progress and disk checks.
+    size_exact: bool = True
     meta: dict[str, Any] = field(default_factory=dict)
 
 

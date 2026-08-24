@@ -179,7 +179,11 @@ class CivitaiProvider:
             url=url,
             filename=str(entry.get("name") or f"civitai-{version_id}.safetensors"),
             provider=self.name,
-            size=int(float(size_kb) * 1024) if isinstance(size_kb, (int, float)) else None,
+            # Rounded, not truncated: Civitai serialises sizeKB with limited
+            # precision, so 13175664.47851562 * 1024 is 13491880425.99999 and
+            # truncating loses a byte the file actually has.
+            size=round(float(size_kb) * 1024) if isinstance(size_kb, (int, float)) else None,
+            size_exact=False,
             sha256=str((hashes or {}).get("SHA256") or "").lower() or None,
             meta={
                 "model_id": version.get("modelId") or ref.model_id,

@@ -192,6 +192,12 @@ it starts. Beyond that, it refuses to write things that are not models:
   reported as "Civitai API key required".
 - A **`200` answering a `Range` request** means the server ignored the range;
   appending would corrupt the file, so it restarts.
+- **A size that cannot be trusted to the byte.** Civitai publishes sizes in
+  kilobytes, clipped to 14 significant digits, so converting back cannot always
+  reproduce the byte count — one real 13 GB checkpoint advertises exactly one byte
+  less than it serves. A published checksum settles the question and is checked
+  first; a size is only decisive when there is no hash, and a kilobyte-derived one
+  is allowed a kilobyte of slack.
 - **`416`** on a resume means the `.part` is already complete.
 - A **stale HuggingFace Xet signature** (a 403 from the CDN) is refreshed once from
   the stable Hub URL.
