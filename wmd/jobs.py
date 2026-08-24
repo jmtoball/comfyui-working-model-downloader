@@ -47,6 +47,7 @@ class Job:
     updated: float = field(default_factory=time.time)
     speed: float = 0.0
     source: str = "panel"
+    workflow: str = ""
 
     _cancel: threading.Event = field(default_factory=threading.Event, repr=False)
     _pause: bool = field(default=False, repr=False)
@@ -70,6 +71,7 @@ class Job:
             "speed": round(self.speed, 1),
             "error": self.error,
             "source": self.source,
+            "workflow": self.workflow,
             "created": self.created,
             "updated": self.updated,
         }
@@ -102,9 +104,17 @@ class JobManager:
 
     # -- queries ----------------------------------------------------------
 
-    def list(self) -> list[Job]:
+    def list(self, workflow: str | None = None) -> list[Job]:
+        """Jobs, optionally only those belonging to one workflow.
+
+        Downloads outlive the graph that started them, so the panel asks for its
+        own -- otherwise opening a second workflow shows the first one's queue.
+        """
         with self._lock:
-            return sorted(self._jobs.values(), key=lambda job: job.created)
+            jobs = sorted(self._jobs.values(), key=lambda job: job.created)
+        if workflow is None:
+            return jobs
+        return [job for job in jobs if job.workflow == workflow]
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -113,9 +123,14 @@ class JobManager:
     def active(self) -> list[Job]:
         return [job for job in self.list() if not job.terminal]
 
-    def clear_finished(self) -> int:
+    def clear_finished(self, workflow: str | None = None) -> int:
+        """Drop finished jobs. Running ones are never dropped from under a user."""
         with self._lock:
-            finished = [job.id for job in self._jobs.values() if job.terminal]
+            finished = [
+                job.id
+                for job in self._jobs.values()
+                if job.terminal and (workflow is None or job.workflow == workflow)
+            ]
             for job_id in finished:
                 del self._jobs[job_id]
         return len(finished)
@@ -130,7 +145,9 @@ class JobManager:
                 self._path_locks[path] = lock
             return lock
 
-    def submit_entry(self, entry: ManifestEntry, *, source: str = "panel") -> Job:
+    def submit_entry(
+        self, entry: ManifestEntry, *, source: str = "panel", workflow: str = ""
+    ) -> Job:
         dest = os.path.join(comfy_env.destination_dir(entry.folder), entry.filename)
         return self.submit(
             RemoteFile(
@@ -143,6 +160,7 @@ class JobManager:
             dest=dest,
             folder=entry.folder,
             source=source,
+            workflow=workflow,
         )
 
     def submit(
@@ -152,11 +170,16 @@ class JobManager:
         dest: str,
         folder: str,
         source: str = "panel",
+        workflow: str = "",
     ) -> Job:
         """Queue a download, reusing the existing job when one is already running."""
         with self._lock:
             for job in self._jobs.values():
                 if job.dest == dest and not job.terminal:
+                    # Two workflows can want the same file; the newcomer adopts the
+                    # transfer already in flight rather than starting a second one.
+                    if workflow and not job.workflow:
+                        job.workflow = workflow
                     return job
             job = Job(
                 id=f"wmd-{next(self._ids)}",
@@ -169,6 +192,7 @@ class JobManager:
                 sha256=file.sha256,
                 total=file.size,
                 source=source,
+                workflow=workflow,
             )
             self._jobs[job.id] = job
 
@@ -211,6 +235,7 @@ class JobManager:
             dest=job.dest,
             folder=job.folder,
             source=job.source,
+            workflow=job.workflow,
         )
 
     # -- worker -----------------------------------------------------------

@@ -12,6 +12,7 @@ const REASONS = [
 ];
 
 function items(count) {
+  if (window.__noneMissing) return [];
   const out = [];
   for (let i = 0; i < count; i += 1) {
     const unresolved = i % 6 === 5;
@@ -28,7 +29,7 @@ function items(count) {
       error: null,
       origin: "note",
       origin_node: String(2580 + i),
-      existing_path: i % 7 === 3 ? "/models/x" : null,
+      existing_path: window.__allPresent ? "/models/present" : i % 7 === 3 ? "/models/x" : null,
       dest_path: "/models/x",
       resolved: !unresolved,
       slot: { node: "12", input: "unet_name", node_type: "UNETLoader" },
@@ -62,10 +63,34 @@ function jobs(count) {
   return out;
 }
 
+// Jobs the fake server has been asked to start, keyed by workflow.
+const queued = new Map();
+
 export const api = {
   addEventListener() {},
-  async fetchApi(path) {
-    const body = path.includes("/folders")
+  async fetchApi(path, options = {}) {
+    const body = options.body ? JSON.parse(options.body) : {};
+    if (path.includes("/download")) {
+      const key = body.workflow_key || "";
+      queued.set(key, [...(queued.get(key) || []), ...(body.items || [])]);
+      return new Response(JSON.stringify({ jobs: [] }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (path.includes("/manifest")) {
+      window.__pinned = body.items || [];
+      return new Response(
+        JSON.stringify({
+          manifest: JSON.stringify({ version: 1, entries: body.items || [] }, null, 2),
+          node_type: "WMD_ModelDownloader",
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return this._fixture(path);
+  },
+  async _fixture(path) {
+    const body2 = path.includes("/folders")
       ? { folders: FOLDERS.map((key) => ({ key, paths: ["/models/" + key] })) }
       : path.includes("/config")
       ? { hf_token_set: true, hf_token_hint: "…d139", hf_token_source: "user",
@@ -76,6 +101,6 @@ export const api = {
       : path.includes("/resolve")
       ? { items: items(Number(window.__itemCount ?? 14)) }
       : {};
-    return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(body2), { headers: { "Content-Type": "application/json" } });
   },
 };

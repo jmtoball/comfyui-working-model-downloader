@@ -54,13 +54,22 @@ def _error(exc: Exception, status: int = 400):
 
 
 def _refs_from_request(body: dict[str, Any]) -> tuple[list, list]:
-    """Build the reference list and slot list a resolve/scan request implies."""
+    """Build the reference list and slot list a resolve/scan request implies.
+
+    Present models are included by default. Once a download finishes its slot is
+    no longer missing, and dropping it here would mean the panel forgets a model
+    the moment it arrives -- you could no longer pin it into the workflow, and any
+    link still listed would lose the loader's own folder and fall back to guessing
+    from its filename.
+    """
     refs = []
     slots = []
     if body.get("workflow") is not None or body.get("prompt"):
         result = scan.scan(body.get("workflow"), body.get("prompt"))
         refs.extend(result.documented)
-        slots = result.missing
+        slots = list(result.missing)
+        if body.get("include_present", True):
+            slots.extend(result.present)
     if body.get("urls"):
         text = body["urls"]
         refs.extend(sources.refs_from_input(text if isinstance(text, str) else "\n".join(text)))
@@ -159,18 +168,25 @@ async def handle_download(request):
     except WmdError as exc:
         return _error(exc)
 
+    workflow = str(body.get("workflow_key") or "")
     manager = jobs.manager()
     started = []
     for entry in entries:
         try:
-            started.append(manager.submit_entry(entry, source="panel").to_json())
+            started.append(
+                manager.submit_entry(entry, source="panel", workflow=workflow).to_json()
+            )
         except Exception as exc:  # noqa: BLE001 - reported per item
             started.append({"filename": entry.filename, "status": jobs.FAILED, "error": str(exc)})
     return _json({"jobs": started})
 
 
-async def handle_jobs(_request):
-    return _json({"jobs": [job.to_json() for job in jobs.manager().list()]})
+async def handle_jobs(request):
+    """The queue, scoped to one workflow unless asked for everything."""
+    workflow = request.query.get("workflow")
+    if request.query.get("all"):
+        workflow = None
+    return _json({"jobs": [job.to_json() for job in jobs.manager().list(workflow)]})
 
 
 async def handle_job_action(request):
@@ -185,8 +201,12 @@ async def handle_job_action(request):
     return _json({"ok": bool(result)})
 
 
-async def handle_clear_jobs(_request):
-    return _json({"cleared": jobs.manager().clear_finished()})
+async def handle_clear_jobs(request):
+    body = await request.json() if request.can_read_body else {}
+    workflow = body.get("workflow_key")
+    if body.get("all"):
+        workflow = None
+    return _json({"cleared": jobs.manager().clear_finished(workflow)})
 
 
 async def handle_manifest(request):

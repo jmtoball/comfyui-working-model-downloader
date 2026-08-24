@@ -14,6 +14,9 @@ const BASE = "/working_model_downloader";
 const STYLESHEET = new URL("./panel.css", import.meta.url).href;
 const NODE_TYPE = "WMD_ModelDownloader";
 const ACTIVE_JOB_STATES = new Set(["queued", "downloading"]);
+// What the server considers terminal. `paused` is neither: it is waiting for you.
+const FINISHED_JOB_STATES = new Set(["done", "present", "error", "cancelled"]);
+const isFinished = (job) => FINISHED_JOB_STATES.has(job.status);
 
 // ComfyUI auto-loads the .js files in WEB_DIRECTORY but not the stylesheet.
 if (!document.querySelector(`link[href="${STYLESHEET}"]`)) {
@@ -52,6 +55,80 @@ function bytes(value) {
   return `${unit === 0 ? size : size.toFixed(1)} ${units[unit]}`;
 }
 
+/**
+ * Which workflow is open, as best the frontend will tell us.
+ *
+ * Downloads and resolutions belong to a workflow, not to the panel: without this
+ * the queue from the last graph is still listed under the next one. Unsaved
+ * workflows share a key, which is the best that can be done for something with no
+ * identity yet.
+ */
+function workflowKey() {
+  const active =
+    app.extensionManager?.workflow?.activeWorkflow ?? app.workflowManager?.activeWorkflow;
+  return String(active?.path || active?.key || active?.filename || "unsaved");
+}
+
+function workflowLabel(key) {
+  return key === "unsaved" ? "unsaved workflow" : key.split("/").pop();
+}
+
+/** Per-workflow scratch state. Best-effort: private browsing may refuse it. */
+const store = {
+  key: (workflow) => `wmd.items.${workflow}`,
+  read(workflow) {
+    try {
+      return JSON.parse(localStorage.getItem(this.key(workflow)) || "[]");
+    } catch {
+      return [];
+    }
+  },
+  write(workflow, items) {
+    try {
+      if (items.length) localStorage.setItem(this.key(workflow), JSON.stringify(items));
+      else localStorage.removeItem(this.key(workflow));
+    } catch {
+      /* storage unavailable; the panel still works, it just forgets */
+    }
+  },
+};
+
+/** The manifest already pinned into this workflow, as resolvable items. */
+function pinnedItems() {
+  const node = app.graph._nodes.find(
+    (candidate) => candidate.comfyClass === NODE_TYPE || candidate.type === NODE_TYPE,
+  );
+  const widget = node?.widgets?.find((candidate) => candidate.name === "manifest");
+  let entries = [];
+  try {
+    entries = JSON.parse(widget?.value || "{}").entries || [];
+  } catch {
+    return [];
+  }
+  return entries.map((entry) => ({
+    url: entry.url,
+    source_url: entry.url,
+    provider: entry.provider || "direct",
+    filename: entry.filename,
+    folder: entry.folder,
+    size: entry.size ?? null,
+    sha256: entry.sha256 ?? null,
+    tier: "manifest",
+    reason: "already pinned in this workflow",
+    origin: entry.origin || "manifest",
+    origin_node: "",
+    existing_path: null,
+    resolved: true,
+    slot: entry.slot || null,
+    candidates: [],
+  }));
+}
+
+/** Identity for merging: a file is the thing at this path in this folder. */
+function itemKey(item) {
+  return `${item.folder || "?"}/${item.filename || item.url}`;
+}
+
 /** The workflow in both shapes: the UI graph carries the notes, the prompt the wiring. */
 async function currentWorkflow() {
   const graph = app.graph.serialize();
@@ -77,15 +154,37 @@ function findOrCreateNode() {
 class Panel {
   constructor(root) {
     this.root = root;
-    this.items = [];
+    this.workflow = workflowKey();
+    this.items = store.read(this.workflow);
     this.folders = [];
     this.jobs = [];
     this.polling = null;
     this.build();
-    this.loadFolders();
+    this.loadFolders().then(() => this.renderResults());
     this.loadConfig();
+    this.renderResults();
     this.refreshJobs();
     api.addEventListener("wmd.progress", (event) => this.onJobEvent(event.detail));
+    // ComfyUI gives no reliable cross-version event for switching workflows, and
+    // comparing one string every couple of seconds costs nothing.
+    this.watch = setInterval(() => this.syncWorkflow(), 2000);
+  }
+
+  /** Follow the user between workflows, carrying each one's state with it. */
+  syncWorkflow() {
+    const current = workflowKey();
+    if (current === this.workflow) return;
+    store.write(this.workflow, this.items);
+    this.workflow = current;
+    this.items = store.read(current);
+    this.jobs = [];
+    this.renderResults();
+    this.refreshJobs();
+    this.say(`Switched to ${workflowLabel(current)}.`);
+  }
+
+  remember() {
+    store.write(this.workflow, this.items);
   }
 
   // -- construction ------------------------------------------------------
@@ -120,6 +219,12 @@ class Panel {
 
     this.jobList = el("div", { className: "wmd-jobs" });
 
+    this.clearButton = el("button", { className: "wmd-link", textContent: "clear finished" });
+    this.clearButton.onclick = async () => {
+      await call("/jobs/clear", { body: { workflow_key: this.workflow } });
+      this.refreshJobs();
+    };
+
     this.root.append(
       el("div", { className: "wmd-section" }, [
         el("div", { className: "wmd-row" }, [scanButton, addButton]),
@@ -136,7 +241,10 @@ class Panel {
         el("div", { className: "wmd-row" }, [this.downloadButton, this.pinButton]),
       ]),
       el("div", { className: "wmd-section wmd-downloads" }, [
-        el("h4", { textContent: "Downloads" }),
+        el("div", { className: "wmd-head" }, [
+          el("h4", { textContent: "Downloads" }),
+          this.clearButton,
+        ]),
         this.jobList,
       ]),
       this.buildSettings(),
@@ -228,12 +336,28 @@ class Panel {
       };
       if (includeWorkflow) Object.assign(body, await currentWorkflow());
       const data = await call("/resolve", { body });
-      this.items = data.items.map((item) => ({ ...item, selected: item.resolved && !item.existing_path }));
+      const fresh = data.items.map((item) => ({
+        ...item,
+        selected: item.resolved && !item.existing_path,
+      }));
+      // A fresh resolution wins, but anything already pinned into the workflow is
+      // kept: a model that has finished downloading no longer shows up as missing,
+      // and dropping it here would mean it could never be pinned.
+      const merged = new Map();
+      for (const item of [...pinnedItems(), ...this.items, ...fresh]) {
+        merged.set(itemKey(item), { ...(merged.get(itemKey(item)) || {}), ...item });
+      }
+      this.items = [...merged.values()];
+      this.remember();
       this.renderResults();
       const ready = this.items.filter((item) => item.resolved).length;
       const stuck = this.items.length - ready;
+      const present = this.items.filter((item) => item.existing_path).length;
       this.say(
-        `${ready} ready` + (stuck ? `, ${stuck} need a decision` : "") + `.`,
+        `${ready} ready` +
+          (present ? `, ${present} already on disk` : "") +
+          (stuck ? `, ${stuck} need a decision` : "") +
+          ` \u00b7 ${workflowLabel(this.workflow)}`,
       );
     } catch (error) {
       this.say(String(error), true);
@@ -246,9 +370,9 @@ class Panel {
       this.results.append(el("div", { className: "wmd-muted", textContent: "Nothing resolved yet." }));
     }
     this.items.forEach((item, index) => this.results.append(this.renderItem(item, index)));
-    const selectable = this.items.some((item) => item.selected);
-    this.downloadButton.disabled = !selectable;
+    this.downloadButton.disabled = !this.items.some((item) => item.selected);
     this.pinButton.disabled = !this.items.some((item) => item.resolved);
+    this.remember();
   }
 
   renderItem(item, index) {
@@ -280,11 +404,22 @@ class Panel {
       .filter(Boolean)
       .join(" · ");
 
+    const remove = el("button", {
+      className: "wmd-remove",
+      textContent: "\u00d7",
+      title: "Remove from this list (and from what gets pinned)",
+    });
+    remove.onclick = () => {
+      this.items.splice(index, 1);
+      this.renderResults();
+    };
+
     const row = el("div", { className: `wmd-item wmd-tier-${item.tier}` }, [
       el("div", { className: "wmd-item-head" }, [
         check,
         el("span", { className: "wmd-item-name", textContent: item.filename || item.source_url }),
         item.existing_path ? el("span", { className: "wmd-badge", textContent: "on disk" }) : null,
+        remove,
       ]),
       el("div", { className: "wmd-muted", textContent: meta }),
       el("div", { className: "wmd-reason", textContent: item.error || item.reason }),
@@ -376,7 +511,7 @@ class Panel {
     const items = this.selectedEntries();
     if (!items.length) return;
     try {
-      await call("/download", { body: { items } });
+      await call("/download", { body: { items, workflow_key: this.workflow } });
       this.say(`Queued ${items.length} download(s).`);
       this.refreshJobs();
     } catch (error) {
@@ -425,7 +560,8 @@ class Panel {
 
   async refreshJobs() {
     try {
-      this.jobs = (await call("/jobs")).jobs;
+      const query = `?workflow=${encodeURIComponent(this.workflow)}`;
+      this.jobs = (await call(`/jobs${query}`)).jobs;
       this.renderJobs();
       this.schedulePoll();
     } catch (error) {
@@ -450,6 +586,7 @@ class Panel {
 
   renderJobs() {
     this.jobList.replaceChildren();
+    this.clearButton.disabled = !this.jobs.some(isFinished);
     if (!this.jobs.length) {
       this.jobList.append(el("div", { className: "wmd-muted", textContent: "No downloads yet." }));
       return;

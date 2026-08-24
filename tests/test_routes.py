@@ -13,13 +13,17 @@ import json
 import pytest
 import responses
 
+from wmd.models import RemoteFile
+
 pytest.importorskip("aiohttp", reason="ComfyUI ships aiohttp; the routes need it")
 
 
 class FakeRequest:
-    def __init__(self, body=None, match_info=None):
+    def __init__(self, body=None, match_info=None, query=None):
         self._body = body or {}
         self.match_info = match_info or {}
+        self.query = query or {}
+        self.can_read_body = body is not None
 
     async def json(self):
         return self._body
@@ -187,3 +191,157 @@ def test_an_unknown_job_action_is_refused(routes, folder_paths):
 def test_job_actions_on_an_unknown_job_are_harmless(routes, folder_paths):
     request = FakeRequest(match_info={"job_id": "nope", "action": "cancel"})
     assert payload(run(routes.handle_job_action, request)) == {"ok": False}
+
+
+# -- state that belongs to one workflow, not to the panel ---------------------
+
+
+def a_workflow(loaded=False):
+    """A note documenting one model, and a loader that wants it."""
+    return {
+        "workflow": {
+            "nodes": [
+                {
+                    "id": 1,
+                    "type": "Note",
+                    "widgets_values": [
+                        "https://huggingface.co/org/repo/resolve/main/style.safetensors"
+                    ],
+                },
+                {"id": 2, "type": "LoraLoader", "widgets_values": ["style.safetensors"]},
+            ]
+        },
+        "prompt": {
+            "2": {"class_type": "LoraLoader", "inputs": {"lora_name": "style.safetensors"}},
+            "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}},
+        },
+    }
+
+
+def mock_huggingface():
+    """The two calls resolving a single-file HuggingFace link makes."""
+    responses.add(responses.GET, "https://huggingface.co/api/models/org/repo", json={"tags": []})
+    responses.add(
+        responses.GET,
+        "https://huggingface.co/api/models/org/repo/tree/main",
+        json=[
+            {
+                "type": "file",
+                "path": "style.safetensors",
+                "size": 4096,
+                "lfs": {"oid": "b" * 64, "size": 4096},
+            }
+        ],
+    )
+
+
+@pytest.fixture
+def lora_workflow(folder_paths, node_registry, make_node_class):
+    node_registry["LoraLoader"] = make_node_class(
+        {"required": {"lora_name": (folder_paths.get_filename_list("loras"),)}}
+    )
+    node_registry["SaveImage"] = make_node_class(
+        {"required": {"images": ("IMAGE",)}}, output_node=True
+    )
+    return folder_paths
+
+
+@responses.activate
+def test_a_model_already_on_disk_is_still_offered(routes, lora_workflow):
+    """Once downloaded its slot is no longer missing, but you must still be able
+    to pin it -- otherwise finishing a download loses the ability to record it."""
+    mock_huggingface()
+    lora_workflow.add_file("loras", "style.safetensors")
+    body = payload(run(routes.handle_resolve, FakeRequest(a_workflow())))
+    assert [item["filename"] for item in body["items"]] == ["style.safetensors"]
+    item = body["items"][0]
+    assert item["resolved"] is True
+    assert item["existing_path"] is not None
+
+
+@responses.activate
+def test_a_downloaded_model_keeps_the_folder_its_loader_asked_for(routes, lora_workflow):
+    """Without the present slots the folder would fall back to a filename guess."""
+    mock_huggingface()
+    lora_workflow.add_file("loras", "style.safetensors")
+    body = payload(run(routes.handle_resolve, FakeRequest(a_workflow())))
+    assert body["items"][0]["folder"] == "loras"
+    assert body["items"][0]["reason"] == "LoraLoader reads lora_name from loras"
+
+
+@responses.activate
+def test_present_models_can_be_excluded_when_asked(routes, lora_workflow):
+    mock_huggingface()
+    lora_workflow.add_file("loras", "style.safetensors")
+    request = FakeRequest({**a_workflow(), "include_present": False})
+    body = payload(run(routes.handle_resolve, request))
+    # The documented link still resolves; it simply has no slot informing it.
+    assert body["items"][0]["reason"] != "LoraLoader reads lora_name from loras"
+
+
+def test_the_queue_is_scoped_to_the_workflow_that_started_it(routes, extension, folder_paths):
+    manager = extension.wmd.jobs.manager()
+    for workflow in ("workflows/one.json", "workflows/two.json"):
+        run(
+            routes.handle_download,
+            FakeRequest(
+                {
+                    "workflow_key": workflow,
+                    "items": [
+                        {
+                            "url": f"https://example.com/{workflow.split('/')[-1]}.safetensors",
+                            "filename": f"{workflow.split('/')[-1]}.safetensors",
+                            "folder": "loras",
+                        }
+                    ],
+                }
+            ),
+        )
+
+    first = payload(run(routes.handle_jobs, FakeRequest(query={"workflow": "workflows/one.json"})))
+    assert [job["filename"] for job in first["jobs"]] == ["one.json.safetensors"]
+
+    everything = payload(run(routes.handle_jobs, FakeRequest(query={"all": "1"})))
+    assert len(everything["jobs"]) == 2
+    assert len(manager.list()) == 2
+
+
+def test_clearing_only_touches_the_asking_workflow(routes, extension, folder_paths):
+    manager = extension.wmd.jobs.manager()
+    for workflow in ("workflows/one.json", "workflows/two.json"):
+        run(
+            routes.handle_download,
+            FakeRequest(
+                {
+                    "workflow_key": workflow,
+                    "items": [
+                        {
+                            "url": f"https://example.com/{workflow.split('/')[-1]}.safetensors",
+                            "filename": f"{workflow.split('/')[-1]}.safetensors",
+                            "folder": "loras",
+                        }
+                    ],
+                }
+            ),
+        )
+    for job in manager.list():
+        job.status = extension.wmd.jobs.FAILED
+
+    cleared = payload(
+        run(routes.handle_clear_jobs, FakeRequest({"workflow_key": "workflows/one.json"}))
+    )
+    assert cleared["cleared"] == 1
+    assert [job.workflow for job in manager.list()] == ["workflows/two.json"]
+
+
+def test_a_running_job_is_never_cleared(routes, extension, folder_paths):
+    manager = extension.wmd.jobs.manager()
+    manager.submit(
+        RemoteFile(url="https://example.com/a.safetensors", filename="a.safetensors"),
+        dest="/tmp/a.safetensors",
+        folder="loras",
+        workflow="workflows/one.json",
+    )
+    for job in manager.list():
+        job.status = extension.wmd.jobs.RUNNING
+    assert manager.clear_finished("workflows/one.json") == 0

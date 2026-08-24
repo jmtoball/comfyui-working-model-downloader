@@ -8,8 +8,13 @@
   padding: 10px;
   height: 100%;
   min-height: 0;
-  /* The long regions scroll individually, so the panel itself never does. */
-  overflow: hidden;
+  /*
+   * The long regions scroll individually, so normally the panel does not. It
+   * stays scrollable as a last resort: on a very short panel with the settings
+   * open, every region is already at its floor and something has to give -- a
+   * scrollbar here beats clipping the Save button off the bottom.
+   */
+  overflow-y: auto;
   box-sizing: border-box;
   font-size: 12px;
   color: var(--fg-color, #ddd);
@@ -52,9 +57,16 @@
  * Downloads may not crowd the models out: capped, scrollable, and free to shrink
  * back to nothing once the queue drains.
  */
+/*
+ * May shrink, but only to a floor. Flexbox distributes shrink weighted by base
+ * size, so without one a short queue beside a long model list is crushed below
+ * its own content; without any shrink at all, a cramped panel pushes the
+ * settings off the bottom instead. The list inside scrolls either way.
+ */
 .wmd-panel > .wmd-downloads {
   flex: 0 1 auto;
   max-height: 45%;
+  min-height: 3.2rem;
 }
 
 .wmd-row {
@@ -182,8 +194,11 @@
   flex: 0 0 auto;
 }
 
-/* Expanded, the settings must not crowd out the lists above it. */
+/* Expanded, the settings must not crowd out the lists above it -- and on a short
+   panel it gives way rather than pushing itself off the bottom. */
 .wmd-panel > details[open] {
+  flex: 0 1 auto;
+  min-height: 6rem;
   max-height: 50%;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -199,6 +214,32 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Section heading with an action beside it (Downloads / clear finished). */
+.wmd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wmd-head h4 {
+  margin: 0;
+}
+
+.wmd-remove {
+  margin-left: auto;
+  padding: 0 5px !important;
+  border: none !important;
+  background: none !important;
+  opacity: 0.45;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.wmd-remove:hover {
+  opacity: 1;
 }
 
 .wmd-item-name {

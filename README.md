@@ -73,10 +73,27 @@ is remembered as a rule, so the next workflow needing that file resolves itself.
 
 **3. *Download selected*,** then **4. *Save to workflow*.**
 
+A model stays listed and stays pinnable after it has downloaded. Its loader slot is
+no longer missing at that point, but forgetting it would mean finishing a download
+costs you the ability to record it — and would drop the folder back to a guess from
+the filename. Anything already pinned into the workflow is merged back in on every
+scan, so a re-scan that finds nothing missing never loses your earlier decisions.
+Use the `×` on a row to drop something you do not want pinned.
+
 Step 4 creates (or updates) a single **Working Model Downloader** node holding the
 pinned manifest. Save the workflow and you are done: queueing that workflow
 anywhere — the UI, `POST /prompt`, a headless worker — re-fetches anything absent
 before the graph runs.
+
+### One workflow at a time
+
+Resolutions and downloads belong to the workflow that produced them. Switch
+workflows and the panel follows: the queue you see is that graph's, and its
+resolutions come back when you return to it. *clear finished* clears the completed
+downloads for the workflow you are looking at, and never touches one still running.
+
+Unsaved workflows share a single key, which is the best that can be done for
+something that has no identity yet.
 
 ### API keys
 

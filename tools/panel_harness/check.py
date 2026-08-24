@@ -80,7 +80,12 @@ MEASURE = """() => {
     const label = child.querySelector('h4,summary')?.textContent || child.className;
     return {
       label: label.trim().slice(0, 24),
-      spill: child.scrollHeight - child.clientHeight,
+      // Content taller than its box only harms anything when the box lets it
+      // show: that is what paints one section across the next. A region with its
+      // own scrollbar is the intended design, not a fault.
+      spill: getComputedStyle(child).overflowY !== 'visible'
+        ? 0
+        : child.scrollHeight - child.clientHeight,
       past: Math.round(rect.bottom - box.bottom),
       top: Math.round(rect.top),
       bottom: Math.round(rect.bottom),
