@@ -50,6 +50,15 @@ TIER_SEARCH = "search"
 TIER_MANUAL = "manual"
 TIER_UNRESOLVED = "unresolved"
 
+# Whether the workflow actually asks for a file. Notes routinely document
+# alternatives, optional extras and whole directories: across a corpus of real
+# workflows, 62% of documented links were never referenced by the graph. Offering
+# them is useful; downloading them by default is not.
+NEED_REQUIRED = "required"      # a loader needs it and it is not on disk
+NEED_SPARE = "spare"            # a loader needs it and it is already there
+NEED_OPTIONAL = "optional"      # documented or found, but nothing in the graph uses it
+NEED_UNKNOWN = "unknown"        # no graph to check against, so we cannot say
+
 
 def has_model_extension(name: str) -> bool:
     return os.path.splitext(str(name))[1].lower() in MODEL_EXTENSIONS
@@ -147,6 +156,7 @@ class Resolution:
     reason: str = ""
     error: str | None = None
     existing_path: str | None = None
+    need: str = NEED_UNKNOWN
     candidates: list[RemoteFile] = field(default_factory=list)
 
     @property

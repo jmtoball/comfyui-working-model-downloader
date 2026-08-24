@@ -16,6 +16,8 @@ function items(count) {
   const out = [];
   for (let i = 0; i < count; i += 1) {
     const unresolved = i % 6 === 5;
+    // Every third link is documented but unused by the graph, as notes really are.
+    const need = unresolved ? "required" : i % 3 === 2 ? "optional" : "required";
     out.push({
       url: `https://huggingface.co/org/repo/resolve/main/model_${i}.safetensors`,
       source_url: `https://huggingface.co/org/repo/resolve/main/model_${i}.safetensors`,
@@ -32,6 +34,7 @@ function items(count) {
       existing_path: window.__allPresent ? "/models/present" : i % 7 === 3 ? "/models/x" : null,
       dest_path: "/models/x",
       resolved: !unresolved,
+      need,
       slot: { node: "12", input: "unet_name", node_type: "UNETLoader" },
       candidates: [],
     });

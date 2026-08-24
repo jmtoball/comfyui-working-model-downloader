@@ -23,6 +23,9 @@ def mount(page, base, *, workflow="workflows/one.json", items=8, jobs=0):
     page.wait_for_function("window.__ready === true")
 
 
+DOWNLOAD_BUTTON = ".wmd-grow .wmd-primary"
+
+
 def scan(page):
     page.click("text=Scan workflow")
     page.wait_for_timeout(500)
@@ -66,7 +69,7 @@ def main() -> int:
         # 2. Downloading, then re-scanning with nothing missing, keeps them pinnable.
         page.evaluate("window.__allPresent = false")
         scan(page)
-        page.click("text=Download selected")
+        page.click(DOWNLOAD_BUTTON)
         page.wait_for_timeout(300)
         page.evaluate("window.__noneMissing = true")   # nothing left to find
         scan(page)
@@ -85,7 +88,27 @@ def main() -> int:
             pinned = page.evaluate("window.__pinned?.length ?? 0")
             check("pin writes every resolved model", pinned > 0, f"{pinned} entries")
 
-        # 4. A second workflow starts clean and does not inherit the first's queue.
+        # 4. Only what the graph asks for is ticked, and the size is stated.
+        gate = context.new_page()
+        mount(gate, base, workflow="workflows/gate.json", items=12, jobs=0)
+        scan(gate)
+        counts = gate.evaluate("""() => {
+          const rows = [...document.querySelectorAll('.wmd-item')];
+          return {
+            rows: rows.length,
+            ticked: rows.filter(r => r.querySelector('input[type=checkbox]')?.checked).length,
+            optional: rows.filter(r => r.textContent.includes('not used here')).length,
+            button: document.querySelector('.wmd-grow .wmd-primary')?.textContent ?? '',
+          };
+        }""")
+        check("links the graph does not use are listed", counts["optional"] > 0,
+              f"{counts['optional']} of {counts['rows']}")
+        check("but are not ticked for download", counts["ticked"] + counts["optional"] <= counts["rows"]
+              and counts["ticked"] < counts["rows"], f"{counts['ticked']} ticked of {counts['rows']}")
+        check("the download button states the size", "(" in counts["button"], counts["button"])
+        gate.close()
+
+        # 5. A second workflow starts clean and does not inherit the first's queue.
         page.evaluate("window.__noneMissing = false")
         second = context.new_page()
         mount(second, base, workflow="workflows/two.json", items=5, jobs=0)
@@ -97,14 +120,14 @@ def main() -> int:
         check("a different workflow starts with no resolutions", rows == 0, f"{rows} rows")
         check("and with no queue from the previous one", "No downloads yet." in queue)
 
-        # 5. Reopening the first workflow restores what it had.
+        # 6. Reopening the first workflow restores what it had.
         third = context.new_page()
         mount(third, base, workflow="workflows/one.json", items=8, jobs=0)
         third.wait_for_timeout(600)
         restored = third.eval_on_selector_all(".wmd-item", "els => els.length")
         check("reopening a workflow restores its resolutions", restored > 0, f"{restored} rows")
 
-        # 6. The clear button is offered only when something can be cleared.
+        # 7. The clear button is offered only when something can be cleared.
         fourth = context.new_page()
         mount(fourth, base, workflow="workflows/three.json", items=4, jobs=0)
         fourth.wait_for_timeout(400)

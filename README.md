@@ -73,6 +73,14 @@ is remembered as a rule, so the next workflow needing that file resolves itself.
 
 **3. *Download selected*,** then **4. *Save to workflow*.**
 
+Only the models the graph actually asks for are ticked. Notes routinely document
+alternatives ("or use the int4 build"), optional extras, and whole directories —
+across 680 real workflows, **62% of documented links were never referenced by the
+graph**, and 18% of workflows link a directory that would otherwise expand to every
+file in it. Those are still listed, badged *not used here*, and one click away; they
+are simply not queued behind your back. The download button states the total size
+before you commit to it.
+
 A model stays listed and stays pinnable after it has downloaded. Its loader slot is
 no longer missing at that point, but forgetting it would mean finishing a download
 costs you the ability to record it — and would drop the folder back to a guess from

@@ -54,10 +54,6 @@
 }
 
 /*
- * Downloads may not crowd the models out: capped, scrollable, and free to shrink
- * back to nothing once the queue drains.
- */
-/*
  * May shrink, but only to a floor. Flexbox distributes shrink weighted by base
  * size, so without one a short queue beside a long model list is crushed below
  * its own content; without any shrink at all, a cramped panel pushes the
@@ -267,6 +263,13 @@
   border-radius: 8px;
   font-size: 10px;
   background: var(--border-color, #444);
+}
+
+/* Outlined rather than filled: a note, not a status. */
+.wmd-badge-optional {
+  background: transparent;
+  border: 1px solid var(--border-color, #444);
+  opacity: 0.75;
 }
 
 .wmd-candidates {

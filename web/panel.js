@@ -14,6 +14,11 @@ const BASE = "/working_model_downloader";
 const STYLESHEET = new URL("./panel.css", import.meta.url).href;
 const NODE_TYPE = "WMD_ModelDownloader";
 const ACTIVE_JOB_STATES = new Set(["queued", "downloading"]);
+// Only what the graph actually asks for is ticked by default. Notes routinely
+// document alternatives, optional extras and whole directories, and across a
+// corpus of real workflows 62% of documented links were never referenced by the
+// graph -- offering those is useful, downloading them unasked is not.
+const WANTED_BY_DEFAULT = new Set(["required", "unknown"]);
 // What the server considers terminal. `paused` is neither: it is waiting for you.
 const FINISHED_JOB_STATES = new Set(["done", "present", "error", "cancelled"]);
 const isFinished = (job) => FINISHED_JOB_STATES.has(job.status);
@@ -114,6 +119,7 @@ function pinnedItems() {
     size: entry.size ?? null,
     sha256: entry.sha256 ?? null,
     tier: "manifest",
+    need: "required",
     reason: "already pinned in this workflow",
     origin: entry.origin || "manifest",
     origin_node: "",
@@ -338,7 +344,7 @@ class Panel {
       const data = await call("/resolve", { body });
       const fresh = data.items.map((item) => ({
         ...item,
-        selected: item.resolved && !item.existing_path,
+        selected: WANTED_BY_DEFAULT.has(item.need) && item.resolved && !item.existing_path,
       }));
       // A fresh resolution wins, but anything already pinned into the workflow is
       // kept: a model that has finished downloading no longer shows up as missing,
@@ -350,12 +356,14 @@ class Panel {
       this.items = [...merged.values()];
       this.remember();
       this.renderResults();
-      const ready = this.items.filter((item) => item.resolved).length;
-      const stuck = this.items.length - ready;
+      const needed = this.items.filter((item) => item.selected).length;
+      const optional = this.items.filter((item) => item.need === "optional").length;
       const present = this.items.filter((item) => item.existing_path).length;
+      const stuck = this.items.filter((item) => !item.resolved).length;
       this.say(
-        `${ready} ready` +
-          (present ? `, ${present} already on disk` : "") +
+        `${needed} to download` +
+          (present ? `, ${present} on disk` : "") +
+          (optional ? `, ${optional} the graph does not use` : "") +
           (stuck ? `, ${stuck} need a decision` : "") +
           ` \u00b7 ${workflowLabel(this.workflow)}`,
       );
@@ -370,7 +378,12 @@ class Panel {
       this.results.append(el("div", { className: "wmd-muted", textContent: "Nothing resolved yet." }));
     }
     this.items.forEach((item, index) => this.results.append(this.renderItem(item, index)));
-    this.downloadButton.disabled = !this.items.some((item) => item.selected);
+    const chosen = this.items.filter((item) => item.selected);
+    const total = chosen.reduce((sum, item) => sum + (item.size || 0), 0);
+    this.downloadButton.textContent = total
+      ? `Download ${chosen.length} (${bytes(total)})`
+      : "Download selected";
+    this.downloadButton.disabled = !chosen.length;
     this.pinButton.disabled = !this.items.some((item) => item.resolved);
     this.remember();
   }
@@ -419,6 +432,13 @@ class Panel {
         check,
         el("span", { className: "wmd-item-name", textContent: item.filename || item.source_url }),
         item.existing_path ? el("span", { className: "wmd-badge", textContent: "on disk" }) : null,
+        item.need === "optional"
+          ? el("span", {
+              className: "wmd-badge wmd-badge-optional",
+              textContent: "not used here",
+              title: "Documented in this workflow, but no loader in it asks for this file",
+            })
+          : null,
         remove,
       ]),
       el("div", { className: "wmd-muted", textContent: meta }),

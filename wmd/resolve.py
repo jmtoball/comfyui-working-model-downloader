@@ -16,6 +16,11 @@ from . import classify, comfy_env, http, match, providers
 from .config import Config
 from .errors import WmdError
 from .models import (
+    NEED_OPTIONAL,
+    NEED_REQUIRED,
+    NEED_SPARE,
+    NEED_UNKNOWN,
+    ORIGIN_MANUAL,
     ORIGIN_SEARCH,
     TIER_DOCUMENTED,
     TIER_MANUAL,
@@ -43,6 +48,23 @@ def dest_path(resolution: Resolution) -> str:
     if not relative:
         raise WmdError(f"{resolution.ref.raw} resolved without a filename")
     return os.path.join(comfy_env.destination_dir(resolution.folder), relative)
+
+
+def classify_need(ref: ModelRef, *, had_slots: bool) -> str:
+    """Whether the workflow actually asks for this file.
+
+    A link bound to a loader slot is needed; one that is not is an alternative, an
+    optional extra, or one file out of a whole directory somebody linked. A URL the
+    user typed is needed by definition -- they asked for it.
+    """
+    if ref.origin == ORIGIN_MANUAL:
+        return NEED_REQUIRED
+    if ref.slot is not None:
+        return NEED_REQUIRED if ref.slot.missing else NEED_SPARE
+    if not had_slots:
+        # No graph to check against; claiming it is unnecessary would be a guess.
+        return NEED_UNKNOWN
+    return NEED_OPTIONAL
 
 
 def _tier_for_origin(ref: ModelRef) -> str:
@@ -118,9 +140,11 @@ def resolve_refs(
     if pending:
         _bound, pending = match.match_files_to_slots(resolved_pairs, pending)
 
+    had_slots = bool(slots)
     for resolution in resolutions:
         if resolution.error is None:
             _finish(resolution)
+        resolution.need = classify_need(resolution.ref, had_slots=had_slots)
 
     if pending and allow_search:
         resolutions.extend(search_for_slots(pending, cfg=cfg, session=session))
@@ -140,6 +164,7 @@ def unresolved_for_slots(slots: list[Slot]) -> list[Resolution]:
                 ref=ref,
                 folder=slot.folder,
                 tier=TIER_UNRESOLVED,
+                need=NEED_REQUIRED,
                 reason=(
                     f"{slot.node_type or 'a loader'} needs {slot.filename} in {slot.folder}, "
                     "but nothing in this workflow says where to get it"
@@ -184,13 +209,16 @@ def search_for_slots(
                     ref=ref,
                     folder=slot.folder,
                     tier=TIER_UNRESOLVED,
+                    need=NEED_REQUIRED,
                     reason=f"no source on HuggingFace or Civitai has a file named {slot.filename}",
                     candidates=[],
                 )
             )
             continue
 
-        resolution = Resolution(ref=ref, candidates=candidates, tier=TIER_SEARCH)
+        resolution = Resolution(
+            ref=ref, candidates=candidates, tier=TIER_SEARCH, need=NEED_REQUIRED
+        )
         if len(candidates) == 1:
             resolution.file = candidates[0]
             _finish(resolution)
@@ -229,6 +257,7 @@ def resolution_json(resolution: Resolution) -> dict[str, object]:
         "origin": resolution.ref.origin,
         "origin_node": resolution.ref.origin_node,
         "existing_path": resolution.existing_path,
+        "need": resolution.need,
         "dest_path": destination,
         "resolved": resolution.resolved,
         "slot": (
