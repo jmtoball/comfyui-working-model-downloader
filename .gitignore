@@ -8,4 +8,6 @@ venv/
 config.json
 rules.json
 *.part
+# Fetched by tools/corpus.py -- other people's workflows, not ours to commit.
+.corpus
 .DS_Store

@@ -31,6 +31,10 @@ DEFAULT_FOLDERS = (
     "embeddings",
     "style_models",
     "hypernetworks",
+    "frame_interpolation",
+    "geometry_estimation",
+    "audio_encoders",
+    "detection",
 )
 
 

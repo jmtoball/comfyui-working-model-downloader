@@ -21,6 +21,18 @@ mirror, a differently-quantised copy, or nothing at all.
 Meanwhile, most shared workflows say exactly where their models come from, in a
 note, right there on the canvas. Nothing else reads them.
 
+That is measurable, so it has been measured. Across **612 real workflows** pulled
+from Civitai's Workflows category (`python tools/corpus.py`):
+
+| in the workflow | share |
+|---|---|
+| has a Note or MarkdownNote node | **70%** |
+| **documents its models with links** — what this reads | **52%** |
+| has `properties.models` — what the others read | 17% |
+
+Documented links are present in three times as many workflows as the metadata
+every other downloader depends on.
+
 So this extension differs in two ways:
 
 1. **Documented links come first.** URLs in Note and MarkdownNote text are
@@ -193,6 +205,22 @@ ruff check .
 `wmd/` never imports ComfyUI — `wmd/comfy_env.py` is the single seam where the real
 `folder_paths` is used when available — so the whole core is testable without it.
 The tests supply a stand-in `folder_paths` and node registry instead.
+
+### Testing against real workflows
+
+Unit tests prove the logic does what it should; `tools/corpus.py` proves it survives
+what people actually publish:
+
+```bash
+python tools/corpus.py fetch      # real workflows from Civitai -> .corpus/ (gitignored)
+python tools/corpus.py scan       # what the scanner finds in them
+python tools/corpus.py coverage   # how often a destination can be named
+```
+
+Set `CIVITAI_API_KEY` to reach the workflows whose authors require a login — about
+two thirds of them. The corpus is other people's work, so it is fetched on demand
+rather than committed; several of the filename heuristics above were derived from
+it, and `coverage` is how to check a change to them actually helps.
 
 ## Prior art
 

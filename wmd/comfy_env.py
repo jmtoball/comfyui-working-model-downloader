@@ -31,10 +31,19 @@ _FALLBACK_KEYS = (
     "controlnet",
     "gligen",
     "upscale_models",
+    "latent_upscale_models",
     "hypernetworks",
     "photomaker",
+    "classifiers",
     "model_patches",
     "audio_encoders",
+    "background_removal",
+    "frame_interpolation",
+    "geometry_estimation",
+    "optical_flow",
+    "detection",
+    "diffusers",
+    "configs",
 )
 
 

@@ -47,10 +47,14 @@ HF_PATH_FOLDERS = {
 # Filename signals, most specific first: the first hit wins, so `clip_vision`
 # must be tested before `clip`, and `control_lora` before the bare `lora`.
 FILENAME_RULES: tuple[tuple[str, str], ...] = (
+    # `ae.safetensors` is the Flux VAE, shipped under that exact name.
+    (r"^ae\.(safetensors|sft|pt)$", "vae"),
     (r"\.vae\.(safetensors|pt|ckpt|sft)$", "vae"),
     (r"(^|[_\-.])vae([_\-.]|$)", "vae"),
     (r"clip[_\-]?vision", "clip_vision"),
     (r"(^|[_\-.])(t5xxl|umt5|clip_l|clip_g|clip_h|text[_\-]?encoder)", "text_encoders"),
+    (r"t5[\w.\-]*encoder", "text_encoders"),
+    (r"llava[_\-]?llama", "text_encoders"),
     (r"(control[_\-]?lora)", "controlnet"),
     (r"(control[_\-]?net|^control[_\-]|(^|[_\-.])cnet([_\-.]|$)|t2i[_\-]?adapter)", "controlnet"),
     (r"ip[_\-]?adapter", "ipadapter"),
@@ -60,8 +64,14 @@ FILENAME_RULES: tuple[tuple[str, str], ...] = (
     (r"^learned_embeds(_?[\w.\-]*)?\.", "embeddings"),
     (r"^pytorch_lora_weights\.", "loras"),
     (r"(textual[_\-]?inversion|embedding)", "embeddings"),
+    (r"(^|[_\-.])(rife|film[_\-]?net)", "frame_interpolation"),
+    (r"(depth[_\-]?anything|zoedepth|(^|[_\-.])midas)", "geometry_estimation"),
+    (r"^sam[_\-]?(vit|hq|2)", "sams"),
     (r"(^|[_\-.])(unet|diffusion[_\-]?model|transformer)([_\-.]|$)", "diffusion_models"),
     (r"(^|[_\-.])(hypernetwork)", "hypernetworks"),
+    # Last: a GGUF that none of the encoder rules above claimed is a quantised
+    # diffusion model, which is what the whole GGUF ecosystem in ComfyUI is for.
+    (r"\.gguf$", "diffusion_models"),
 )
 
 # Above this, a file with no other signal is almost certainly a full checkpoint.

@@ -101,11 +101,34 @@ def test_a_lora_tag_on_the_repo_is_enough(folder_paths):
         ("learned_embeds.bin", "embeddings"),
         ("learned_embeds_atkn.safetensors", "embeddings"),
         ("pytorch_lora_weights.safetensors", "loras"),
+        # Patterns taken from a corpus of 500+ real Civitai workflows.
+        ("ae.safetensors", "vae"),
+        ("rife49.pth", "frame_interpolation"),
+        ("rife_v4.26.safetensors", "frame_interpolation"),
+        ("film_net_fp32.pt", "frame_interpolation"),
+        ("depth_anything_v2_vits.pth", "geometry_estimation"),
+        ("llava_llama3_fp8_scaled.safetensors", "text_encoders"),
+        ("t5-v1_1-xxl-encoder-Q8_0.gguf", "text_encoders"),
+        ("umt5-xxl-encoder-Q4_K_S.gguf", "text_encoders"),
+        ("hunyuan-video-t2v-720p-Q5_K_M.gguf", "diffusion_models"),
     ],
 )
 def test_the_filename_is_the_last_resort_before_giving_up(folder_paths, filename, folder):
     verdict = classify.classify(ModelRef(raw="x", filename_hint=filename))
     assert (verdict.folder, verdict.tier) == (folder, "filename")
+
+
+def test_a_quantised_encoder_is_an_encoder_before_it_is_a_gguf(folder_paths):
+    """Rule order matters: the catch-all .gguf rule must not swallow encoders."""
+    assert classify.classify(ModelRef(raw="x", filename_hint="umt5-xxl-encoder-Q4_K_S.gguf")).folder == "text_encoders"
+    assert classify.classify(ModelRef(raw="x", filename_hint="flux1-dev-Q8_0.gguf")).folder == "diffusion_models"
+
+
+def test_a_folder_only_some_installs_have_is_skipped_when_absent(folder_paths):
+    """`sams` comes from the Impact Pack, so the rule must not fire without it."""
+    assert classify.classify(ModelRef(raw="x", filename_hint="sam_vit_b_01ec64.pth")).folder is None
+    folder_paths.add_folder("sams")
+    assert classify.classify(ModelRef(raw="x", filename_hint="sam_vit_b_01ec64.pth")).folder == "sams"
 
 
 def test_clip_vision_is_tested_before_clip(folder_paths):
