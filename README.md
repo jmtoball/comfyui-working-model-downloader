@@ -222,6 +222,23 @@ two thirds of them. The corpus is other people's work, so it is fetched on deman
 rather than committed; several of the filename heuristics above were derived from
 it, and `coverage` is how to check a change to them actually helps.
 
+### Checking the sidebar panel
+
+The panel is the one part unit tests cannot reach, so it has its own harness. It
+mounts `web/panel.js` in a headless browser against stubbed `app`/`api` modules,
+fills it with fixture data, and asserts no section spills its content over the next
+one:
+
+```bash
+pip install playwright && playwright install chromium
+python tools/panel_harness/check.py                # pass/fail across 7 layouts
+python tools/panel_harness/check.py --shots out/   # and write screenshots
+```
+
+Run it after touching `panel.css` or the panel's DOM structure. Long model lists
+combined with a busy download queue is the case that breaks, and it is not visible
+until you open the sidebar with both.
+
 ## Prior art
 
 The other downloaders in this space are worth knowing about, and reading them

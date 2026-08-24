@@ -135,7 +135,10 @@ class Panel {
         this.results,
         el("div", { className: "wmd-row" }, [this.downloadButton, this.pinButton]),
       ]),
-      el("div", { className: "wmd-section" }, [el("h4", { textContent: "Downloads" }), this.jobList]),
+      el("div", { className: "wmd-section wmd-downloads" }, [
+        el("h4", { textContent: "Downloads" }),
+        this.jobList,
+      ]),
       this.buildSettings(),
     );
   }
