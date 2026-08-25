@@ -528,10 +528,16 @@ class Panel {
   }
 
   async download() {
+    const chosen = this.items.filter((item) => item.selected && item.resolved);
     const items = this.selectedEntries();
     if (!items.length) return;
     try {
       await call("/download", { body: { items, workflow_key: this.workflow } });
+      // Handed over to the queue. Leaving them ticked means the next Download --
+      // after adding one more model -- submits them all over again, and a job
+      // whose file is already there still takes up a row saying so.
+      for (const item of chosen) item.selected = false;
+      this.renderResults();
       this.say(`Queued ${items.length} download(s).`);
       this.refreshJobs();
     } catch (error) {
@@ -578,6 +584,7 @@ class Panel {
     const index = this.jobs.findIndex((existing) => existing.id === job.id);
     if (index >= 0) this.jobs[index] = job;
     else this.jobs.push(job);
+    if (this.noteFinished(job)) this.renderResults();
     this.renderJobs();
     this.schedulePoll();
   }
@@ -587,10 +594,30 @@ class Panel {
     return !job.workflow || job.workflow === this.workflow;
   }
 
+  /**
+   * Reflect a finished download back onto its row.
+   *
+   * Without this the list still claims the model is missing until the next scan,
+   * so it stays eligible to be ticked and queued a second time.
+   */
+  noteFinished(job) {
+    if (job.status !== "done" && job.status !== "present") return false;
+    const base = (name) => String(name || "").replace(/\\/g, "/").split("/").pop();
+    const item = this.items.find(
+      (candidate) =>
+        candidate.folder === job.folder && base(candidate.filename) === base(job.filename),
+    );
+    if (!item || item.existing_path) return false;
+    item.existing_path = job.dest || true;
+    item.selected = false;
+    return true;
+  }
+
   async refreshJobs() {
     try {
       const query = `?workflow=${encodeURIComponent(this.workflow)}`;
       this.jobs = (await call(`/jobs${query}`)).jobs;
+      if (this.jobs.map((job) => this.noteFinished(job)).some(Boolean)) this.renderResults();
       this.renderJobs();
       this.schedulePoll();
     } catch (error) {

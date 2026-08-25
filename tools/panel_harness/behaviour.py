@@ -108,7 +108,56 @@ def main() -> int:
         check("the download button states the size", "(" in counts["button"], counts["button"])
         gate.close()
 
-        # 5. Pushed progress for another workflow's download must not leak in.
+        # 5. Downloading hands the models to the queue; it does not keep them ticked.
+        again = context.new_page()
+        mount(again, base, workflow="workflows/again.json", items=6, jobs=0)
+        scan(again)
+        again.click(DOWNLOAD_BUTTON)
+        again.wait_for_timeout(300)
+        still_ticked = again.eval_on_selector_all(
+            ".wmd-item input[type=checkbox]", "els => els.filter(e => e.checked).length"
+        )
+        check("submitted models are unticked", still_ticked == 0, f"{still_ticked} still ticked")
+
+        # Tick one more and download again: only the new one may be sent.
+        again.evaluate("""() => {
+          const box = [...document.querySelectorAll('.wmd-item input[type=checkbox]')]
+            .find(b => !b.checked && !b.disabled);
+          box.click();
+        }""")
+        again.wait_for_timeout(200)
+        again.click(DOWNLOAD_BUTTON)
+        again.wait_for_timeout(300)
+        batches = again.evaluate("() => window.__batches || []")
+        check("a second download sends only what was newly ticked",
+              len(batches) == 2 and len(batches[1]) == 1,
+              f"batches={batches}")
+
+        # A finished download marks its own row, so it cannot be queued a third
+        # time. Counted as a change, since a fixture row is already on disk.
+        def on_disk_rows():
+            return again.eval_on_selector_all(
+                ".wmd-item", "els => els.filter(e => e.textContent.includes('on disk')).length"
+            )
+
+        before_finish = on_disk_rows()
+        again.evaluate("""() => {
+          const name = window.__batches[0][0];
+          const row = [...document.querySelectorAll('.wmd-item')]
+            .find(r => r.textContent.includes(name));
+          const folder = row.querySelector('select').value;
+          window.__emit('wmd.progress', {
+            id: 'fin-1', filename: name, folder, dest: '/models/' + name,
+            status: 'done', downloaded: 1, total: 1, speed: 0, workflow: 'workflows/again.json',
+          });
+        }""")
+        again.wait_for_timeout(300)
+        check("a finished download marks its own row as on disk",
+              on_disk_rows() == before_finish + 1,
+              f"{before_finish} -> {on_disk_rows()}")
+        again.close()
+
+        # 6. Pushed progress for another workflow's download must not leak in.
         leak = context.new_page()
         mount(leak, base, workflow="workflows/mine.json", items=4, jobs=0)
         leak.wait_for_timeout(400)
@@ -142,7 +191,7 @@ def main() -> int:
               "queued.safetensors" in queue_text())
         leak.close()
 
-        # 6. A second workflow starts clean and does not inherit the first's queue.
+        # 7. A second workflow starts clean and does not inherit the first's queue.
         page.evaluate("window.__noneMissing = false")
         second = context.new_page()
         mount(second, base, workflow="workflows/two.json", items=5, jobs=0)
@@ -154,14 +203,14 @@ def main() -> int:
         check("a different workflow starts with no resolutions", rows == 0, f"{rows} rows")
         check("and with no queue from the previous one", "No downloads yet." in queue)
 
-        # 7. Reopening the first workflow restores what it had.
+        # 8. Reopening the first workflow restores what it had.
         third = context.new_page()
         mount(third, base, workflow="workflows/one.json", items=8, jobs=0)
         third.wait_for_timeout(600)
         restored = third.eval_on_selector_all(".wmd-item", "els => els.length")
         check("reopening a workflow restores its resolutions", restored > 0, f"{restored} rows")
 
-        # 8. The clear button is offered only when something can be cleared.
+        # 9. The clear button is offered only when something can be cleared.
         fourth = context.new_page()
         mount(fourth, base, workflow="workflows/three.json", items=4, jobs=0)
         fourth.wait_for_timeout(400)

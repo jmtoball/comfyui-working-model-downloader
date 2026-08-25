@@ -85,6 +85,8 @@ export const api = {
     if (path.includes("/download")) {
       const key = body.workflow_key || "";
       queued.set(key, [...(queued.get(key) || []), ...(body.items || [])]);
+      // One entry per click, so a test can see exactly what each Download sent.
+      window.__batches = [...(window.__batches || []), (body.items || []).map((i) => i.filename)];
       return new Response(JSON.stringify({ jobs: [] }), {
         headers: { "Content-Type": "application/json" },
       });
