@@ -100,6 +100,10 @@ workflows and the panel follows: the queue you see is that graph's, and its
 resolutions come back when you return to it. *clear finished* clears the completed
 downloads for the workflow you are looking at, and never touches one still running.
 
+A download started by a queued prompt rather than by the panel belongs to no
+particular graph, so it shows under all of them — hiding it would leave a transfer
+nobody could see or cancel.
+
 Unsaved workflows share a single key, which is the best that can be done for
 something that has no identity yet.
 

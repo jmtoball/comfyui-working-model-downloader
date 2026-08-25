@@ -108,7 +108,41 @@ def main() -> int:
         check("the download button states the size", "(" in counts["button"], counts["button"])
         gate.close()
 
-        # 5. A second workflow starts clean and does not inherit the first's queue.
+        # 5. Pushed progress for another workflow's download must not leak in.
+        leak = context.new_page()
+        mount(leak, base, workflow="workflows/mine.json", items=4, jobs=0)
+        leak.wait_for_timeout(400)
+
+        def queue_text():
+            return leak.eval_on_selector(".wmd-jobs", "n => n.textContent")
+
+        leak.evaluate("""() => window.__emit('wmd.progress', {
+          id: 'other-1', filename: 'theirs.safetensors', folder: 'loras',
+          status: 'downloading', downloaded: 10, total: 100, speed: 1,
+          workflow: 'workflows/theirs.json',
+        })""")
+        leak.wait_for_timeout(200)
+        check("progress from another workflow is ignored", "theirs.safetensors" not in queue_text())
+
+        leak.evaluate("""() => window.__emit('wmd.progress', {
+          id: 'mine-1', filename: 'mine.safetensors', folder: 'loras',
+          status: 'downloading', downloaded: 10, total: 100, speed: 1,
+          workflow: 'workflows/mine.json',
+        })""")
+        leak.wait_for_timeout(200)
+        check("progress for this workflow is shown", "mine.safetensors" in queue_text())
+
+        # A prompt-driven download carries no workflow and belongs to all of them.
+        leak.evaluate("""() => window.__emit('wmd.progress', {
+          id: 'node-1', filename: 'queued.safetensors', folder: 'loras',
+          status: 'downloading', downloaded: 10, total: 100, speed: 1, workflow: '',
+        })""")
+        leak.wait_for_timeout(200)
+        check("a download started by a queued prompt is still shown",
+              "queued.safetensors" in queue_text())
+        leak.close()
+
+        # 6. A second workflow starts clean and does not inherit the first's queue.
         page.evaluate("window.__noneMissing = false")
         second = context.new_page()
         mount(second, base, workflow="workflows/two.json", items=5, jobs=0)
@@ -120,14 +154,14 @@ def main() -> int:
         check("a different workflow starts with no resolutions", rows == 0, f"{rows} rows")
         check("and with no queue from the previous one", "No downloads yet." in queue)
 
-        # 6. Reopening the first workflow restores what it had.
+        # 7. Reopening the first workflow restores what it had.
         third = context.new_page()
         mount(third, base, workflow="workflows/one.json", items=8, jobs=0)
         third.wait_for_timeout(600)
         restored = third.eval_on_selector_all(".wmd-item", "els => els.length")
         check("reopening a workflow restores its resolutions", restored > 0, f"{restored} rows")
 
-        # 7. The clear button is offered only when something can be cleared.
+        # 8. The clear button is offered only when something can be cleared.
         fourth = context.new_page()
         mount(fourth, base, workflow="workflows/three.json", items=4, jobs=0)
         fourth.wait_for_timeout(400)

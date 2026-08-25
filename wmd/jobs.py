@@ -57,6 +57,15 @@ class Job:
     def terminal(self) -> bool:
         return self.status in _TERMINAL
 
+    def belongs_to(self, workflow: str | None) -> bool:
+        """Whether this job should be shown under ``workflow``.
+
+        A job with no workflow was started by a queued prompt rather than by the
+        panel, so it belongs to no particular graph and is shown under all of
+        them -- hiding it would mean a download nobody could see or cancel.
+        """
+        return workflow is None or self.workflow in ("", workflow)
+
     def to_json(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -112,9 +121,7 @@ class JobManager:
         """
         with self._lock:
             jobs = sorted(self._jobs.values(), key=lambda job: job.created)
-        if workflow is None:
-            return jobs
-        return [job for job in jobs if job.workflow == workflow]
+        return [job for job in jobs if job.belongs_to(workflow)]
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -127,9 +134,7 @@ class JobManager:
         """Drop finished jobs. Running ones are never dropped from under a user."""
         with self._lock:
             finished = [
-                job.id
-                for job in self._jobs.values()
-                if job.terminal and (workflow is None or job.workflow == workflow)
+                job.id for job in self._jobs.values() if job.terminal and job.belongs_to(workflow)
             ]
             for job_id in finished:
                 del self._jobs[job_id]

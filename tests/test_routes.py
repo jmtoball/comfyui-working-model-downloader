@@ -345,3 +345,42 @@ def test_a_running_job_is_never_cleared(routes, extension, folder_paths):
     for job in manager.list():
         job.status = extension.wmd.jobs.RUNNING
     assert manager.clear_finished("workflows/one.json") == 0
+
+
+def test_a_download_with_no_workflow_is_visible_under_every_one(routes, extension, folder_paths):
+    """A queued prompt starts downloads without a workflow key. Hiding those would
+    leave a transfer nobody can see or cancel."""
+    manager = extension.wmd.jobs.manager()
+    manager.submit(
+        RemoteFile(url="https://example.com/node.safetensors", filename="node.safetensors"),
+        dest="/tmp/node.safetensors",
+        folder="loras",
+        source="prompt",
+    )
+    run(
+        routes.handle_download,
+        FakeRequest(
+            {
+                "workflow_key": "workflows/one.json",
+                "items": [
+                    {
+                        "url": "https://example.com/panel.safetensors",
+                        "filename": "panel.safetensors",
+                        "folder": "loras",
+                    }
+                ],
+            }
+        ),
+    )
+
+    for workflow in ("workflows/one.json", "workflows/two.json"):
+        names = {
+            job["filename"]
+            for job in payload(run(routes.handle_jobs, FakeRequest(query={"workflow": workflow})))[
+                "jobs"
+            ]
+        }
+        assert "node.safetensors" in names, workflow
+    # The panel's own download stays with the workflow that asked for it.
+    other = payload(run(routes.handle_jobs, FakeRequest(query={"workflow": "workflows/two.json"})))
+    assert "panel.safetensors" not in {job["filename"] for job in other["jobs"]}

@@ -69,8 +69,17 @@ function jobs(count) {
 // Jobs the fake server has been asked to start, keyed by workflow.
 const queued = new Map();
 
+// Real listener plumbing: the panel's handling of pushed progress is where a
+// job belonging to another workflow can leak in, so tests must be able to fire one.
+const listeners = new Map();
+window.__emit = (type, detail) => {
+  for (const fn of listeners.get(type) || []) fn({ detail });
+};
+
 export const api = {
-  addEventListener() {},
+  addEventListener(type, fn) {
+    listeners.set(type, [...(listeners.get(type) || []), fn]);
+  },
   async fetchApi(path, options = {}) {
     const body = options.body ? JSON.parse(options.body) : {};
     if (path.includes("/download")) {

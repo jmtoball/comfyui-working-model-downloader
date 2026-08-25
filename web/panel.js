@@ -571,11 +571,20 @@ class Panel {
 
   onJobEvent(job) {
     if (!job?.id) return;
+    // Progress is broadcast to every client for every job, so a download running
+    // under another workflow arrives here too. Without this the panel is cleared
+    // on switching and then refilled by the next progress tick.
+    if (!this.ownsJob(job)) return;
     const index = this.jobs.findIndex((existing) => existing.id === job.id);
     if (index >= 0) this.jobs[index] = job;
     else this.jobs.push(job);
     this.renderJobs();
     this.schedulePoll();
+  }
+
+  /** A job with no workflow came from a queued prompt and belongs to all of them. */
+  ownsJob(job) {
+    return !job.workflow || job.workflow === this.workflow;
   }
 
   async refreshJobs() {
