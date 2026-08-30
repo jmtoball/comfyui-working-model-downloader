@@ -163,3 +163,77 @@ def test_the_api_key_goes_in_a_header_not_the_url(cfg, session):
     request = responses.calls[0].request
     assert request.headers["Authorization"] == "Bearer secret-key"
     assert "secret-key" not in request.url
+
+
+# -- one version, several builds, one filename -------------------------------
+#
+# A Civitai version can publish two files under the *same* name -- a pruned fp16
+# build and a full one, say -- distinguished only by fileId. Real shape, taken
+# from Realistic Vision V6.0 B1: file 418901 is 2.0GB and primary, 418904 is
+# 4.0GB, and both are called realisticVisionV60B1_v51HyperVAE.safetensors.
+
+TWO_BUILDS = "https://civitai.com/api/v1/model-versions/501240"
+PRIMARY_ID, FULL_ID = "418901", "418904"
+PRIMARY_KB, FULL_KB = 2082642.474609375, 4165133.80078125
+DOWNLOAD = "https://civitai.com/api/download/models/501240"
+
+
+def mock_two_builds():
+    responses.add(responses.GET, TWO_BUILDS, json=fixture("civitai_two_builds.json"))
+
+
+@responses.activate
+def test_a_file_id_selects_that_exact_file(cfg, session):
+    mock_two_builds()
+    ref = providers.parse(f"https://civitai.red/api/download/models/501240?fileId={FULL_ID}")
+    assert ref.file_id == FULL_ID
+    file = providers.by_name("civitai").resolve(ref, cfg, session)[0]
+    assert file.size == round(FULL_KB * 1024)             # the full build, not the primary
+    assert f"fileId={FULL_ID}" in file.url
+
+
+@responses.activate
+def test_a_file_id_beats_the_primary_flag(cfg, session):
+    """The primary file is the default, not an override of an explicit request."""
+    mock_two_builds()
+    ref = providers.parse(f"{DOWNLOAD}?fileId={FULL_ID}")
+    file = providers.by_name("civitai").resolve(ref, cfg, session)[0]
+    assert file.size == round(FULL_KB * 1024)
+
+
+@responses.activate
+def test_without_a_file_id_the_primary_file_is_still_used(cfg, session):
+    mock_two_builds()
+    file = providers.by_name("civitai").resolve(providers.parse(DOWNLOAD), cfg, session)[0]
+    assert file.size == round(PRIMARY_KB * 1024)
+
+
+@responses.activate
+def test_an_unknown_file_id_fails_loudly_rather_than_substituting(cfg, session):
+    """Quietly handing over the 2GB build in place of the 4GB one is worse."""
+    mock_two_builds()
+    ref = providers.parse(f"{DOWNLOAD}?fileId=999999")
+    with pytest.raises(Exception, match="has no file 999999"):
+        providers.by_name("civitai").resolve(ref, cfg, session)
+
+
+def test_two_builds_of_one_version_are_not_deduplicated():
+    """They share a version *and* a filename, so only the file id tells them apart."""
+    from wmd import sources
+
+    first = providers.parse(f"{DOWNLOAD}?fileId={FULL_ID}")
+    second = providers.parse(f"{DOWNLOAD}?fileId={PRIMARY_ID}")
+    assert first.key() != second.key()
+    assert len(sources.dedupe([first, second])) == 2
+
+
+@responses.activate
+def test_a_constructed_url_still_names_the_file_it_resolved(cfg, session):
+    """Even when the API omits a per-file downloadUrl."""
+    version = fixture("civitai_two_builds.json")
+    for entry in version["files"]:
+        entry.pop("downloadUrl")
+    responses.add(responses.GET, TWO_BUILDS, json=version)
+    ref = providers.parse(f"{DOWNLOAD}?fileId={FULL_ID}")
+    file = providers.by_name("civitai").resolve(ref, cfg, session)[0]
+    assert f"fileId={FULL_ID}" in file.url

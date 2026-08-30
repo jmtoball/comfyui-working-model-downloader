@@ -101,9 +101,12 @@ class ModelRef:
     path: str | None = None
     is_tree: bool = False
 
-    # Civitai coordinates.
+    # Civitai coordinates. A version can publish several files under the *same*
+    # filename -- an int8 and a bf16 build, say -- so ``file_id`` is the only thing
+    # that tells them apart.
     model_id: str | None = None
     version_id: str | None = None
+    file_id: str | None = None
     query: dict[str, str] = field(default_factory=dict)
 
     # Hints gathered on the way in.
@@ -125,7 +128,9 @@ class ModelRef:
         if self.provider == PROVIDER_HUGGINGFACE:
             return f"hf:{self.repo}@{self.revision}/{self.path or ''}"
         if self.provider == PROVIDER_CIVITAI:
-            return f"civitai:{self.model_id or ''}:{self.version_id or ''}"
+            # The file id is part of the identity: two links to the same version
+            # can name two different builds, and must not collapse into one.
+            return f"civitai:{self.model_id or ''}:{self.version_id or ''}:{self.file_id or ''}"
         return f"url:{self.raw}"
 
 

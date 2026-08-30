@@ -84,6 +84,10 @@ class CivitaiProvider:
         for key in _FILE_PARAMS:
             if params.get(key):
                 ref.query[key] = params[key][0]
+        # `fileId` names one exact file. A version may publish several under the
+        # same filename, so this is not a preference to weigh -- it is the answer.
+        if params.get("fileId"):
+            ref.file_id = params["fileId"][0]
 
         # /api/download/models/<versionId>
         if segments[:3] == ["api", "download", "models"] and len(segments) > 3:
@@ -150,6 +154,18 @@ class CivitaiProvider:
         files = [f for f in (version.get("files") or []) if isinstance(f, dict)]
         if not files:
             return None
+
+        if ref.file_id:
+            exact = next((f for f in files if str(f.get("id")) == str(ref.file_id)), None)
+            if exact is None:
+                # Falling back to the primary file here would hand over a
+                # different build under the same name, which is worse than failing.
+                raise ResolutionFailed(
+                    f"Civitai version {version.get('id') or ref.raw} has no file "
+                    f"{ref.file_id}; it offers "
+                    + ", ".join(f"{f.get('id')} ({f.get('name')})" for f in files)
+                )
+            return exact
         wanted = {k: v.lower() for k, v in ref.query.items() if k in _FILE_PARAMS}
         if wanted:
             def matches(entry: dict[str, Any]) -> bool:
@@ -169,6 +185,11 @@ class CivitaiProvider:
         model = version.get("model") if isinstance(version.get("model"), dict) else {}
         version_id = version.get("id") or ref.version_id
         url = str(entry.get("downloadUrl") or f"{API}/download/models/{version_id}")
+        # Civitai's own per-file downloadUrl already carries the fileId; a
+        # constructed one has to say which file it means.
+        file_id = entry.get("id") or ref.file_id
+        if file_id and "fileId=" not in url:
+            url = f"{url}{'&' if '?' in url else '?'}fileId={file_id}"
         if ref.query:
             extra = "&".join(f"{k}={v}" for k, v in ref.query.items() if k in _FILE_PARAMS)
             if extra:

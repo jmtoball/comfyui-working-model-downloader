@@ -1,0 +1,44 @@
+{
+  "id": 501240,
+  "modelId": 4201,
+  "name": "V5.1 Hyper (VAE)",
+  "baseModel": "SD 1.5 Hyper",
+  "model": {
+    "name": "Realistic Vision V6.0 B1",
+    "type": "Checkpoint"
+  },
+  "files": [
+    {
+      "id": 418901,
+      "name": "realisticVisionV60B1_v51HyperVAE.safetensors",
+      "type": "Model",
+      "primary": true,
+      "sizeKB": 2082642.474609375,
+      "metadata": {
+        "format": "SafeTensor",
+        "size": "pruned",
+        "fp": "fp16"
+      },
+      "downloadUrl": "https://civitai.com/api/download/models/501240?fileId=418901",
+      "hashes": {
+        "SHA256": "F47E942AD4C30D863AD7F53CB60145FFCD2118845DFA705CE8BD6B42E90C4A13"
+      }
+    },
+    {
+      "id": 418904,
+      "name": "realisticVisionV60B1_v51HyperVAE.safetensors",
+      "type": "Model",
+      "primary": false,
+      "sizeKB": 4165133.80078125,
+      "metadata": {
+        "format": "SafeTensor",
+        "size": "full",
+        "fp": "fp16"
+      },
+      "downloadUrl": "https://civitai.com/api/download/models/501240?fileId=418904",
+      "hashes": {
+        "SHA256": "0928B30687250B4CA459ADF9735BDEABBC0933B1E4E6FD352DF0A7D15596053F"
+      }
+    }
+  ]
+}
