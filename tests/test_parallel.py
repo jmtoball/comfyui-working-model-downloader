@@ -206,7 +206,7 @@ def test_segments_cover_the_file_exactly():
             spans = download._segments(total, connections)
             assert spans[0][0] == 0
             assert spans[-1][1] == total - 1
-            for (_, end), (start, _) in zip(spans, spans[1:]):
+            for (_, end), (start, _) in zip(spans, spans[1:], strict=False):
                 assert start == end + 1
             assert sum(end - start + 1 for start, end in spans) == total
 
