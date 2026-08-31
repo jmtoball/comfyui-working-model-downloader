@@ -26,6 +26,11 @@ _lock = threading.Lock()
 @dataclass
 class Preferences:
     max_concurrent_downloads: int = 2
+    # Connections *per file*. One stream rarely gets the whole pipe: on a rented
+    # GPU box a single connection to HuggingFace sustained 3-29 MB/s while eight
+    # ranged connections to the same file, at the same moment, reached 103 MB/s.
+    # This multiplies with max_concurrent_downloads, so keep the product civil.
+    download_connections: int = 4
     request_timeout: int = 30
     search_limit: int = 20
     include_nsfw: bool = False
