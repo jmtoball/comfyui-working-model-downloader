@@ -197,37 +197,141 @@ PARALLEL_MIN_SIZE = 32 * 1024 * 1024
 _RANGED = 206
 
 
+# Splitting a span smaller than this is not worth a fresh connection and its
+# request round trip.
+MIN_STEAL = 16 * 1024 * 1024
+
+
+class _Segment:
+    """A contiguous span of the file, and how much of it is already on disk.
+
+    ``end`` is inclusive and *shrinks* when another worker steals the tail.
+    Fixed spans are what make the last stretch of a large download crawl: the
+    first connection to finish sits idle while the slowest one carries the rest
+    alone, at a quarter of the rate the link was managing a moment earlier.
+    """
+
+    __slots__ = ("start", "end", "done")
+
+    def __init__(self, start: int, end: int, done: int = 0) -> None:
+        self.start = start
+        self.end = end
+        self.done = done
+
+    @property
+    def cursor(self) -> int:
+        """The next byte this segment needs."""
+        return self.start + self.done
+
+    @property
+    def remaining(self) -> int:
+        return self.end - self.cursor + 1
+
+
+def _covers(segments: list[_Segment], total: int) -> bool:
+    """Whether the spans tile the file exactly -- no gap, no overlap."""
+    nextbyte = 0
+    for segment in sorted(segments, key=lambda s: s.start):
+        if segment.start != nextbyte:
+            return False
+        nextbyte = segment.end + 1
+    return nextbyte == total
+
+
+def _take_work(
+    pending: list[_Segment], segments: list[_Segment], lock: threading.Lock
+) -> _Segment | None:
+    """The next span for a worker that has run out of its own.
+
+    An unclaimed span first -- a resumed plan can hold more of them than we run
+    workers -- and otherwise half of whatever span has the most left. Returning
+    None means there is no longer enough work to be worth another connection.
+    """
+    with lock:
+        while pending:
+            segment = pending.pop()
+            if segment.remaining > 0:
+                return segment
+        donor = max(segments, key=lambda s: s.remaining, default=None)
+        if donor is None or donor.remaining < 2 * MIN_STEAL:
+            return None
+        # The donor keeps everything up to the split; we take the tail. It may
+        # write a little past the new end before it notices, which is why the
+        # writer clips rather than trusting the bound it started with.
+        split = donor.cursor + donor.remaining // 2
+        thief = _Segment(split, donor.end)
+        donor.end = split - 1
+        segments.append(thief)
+        return thief
+
+
 def _plan_path(part: str) -> str:
     return part + ".plan"
 
 
-def _load_plan(part: str, total: int, connections: int) -> list[int] | None:
-    """Per-segment byte counts from a previous run, if they still apply.
+def _load_plan(part: str, total: int, connections: int) -> list[_Segment] | None:
+    """The spans from a previous run, if they still describe this file.
 
-    The plan is only usable when it describes the same file cut the same way;
-    a changed size or connection count means the offsets no longer line up.
+    Two shapes are accepted: explicit spans, and the equal cut that plans
+    written before work stealing implied by their connection count.
     """
     try:
         with open(_plan_path(part), encoding="utf-8") as handle:
             plan = json.load(handle)
     except (OSError, ValueError):
         return None
-    if not isinstance(plan, dict):
+    if not isinstance(plan, dict) or plan.get("total") != total:
         return None
-    if plan.get("total") != total or plan.get("connections") != connections:
+
+    raw = plan.get("segments")
+    if isinstance(raw, list):
+        segments = []
+        for entry in raw:
+            if not isinstance(entry, list) or len(entry) != 3:
+                return None
+            if not all(isinstance(n, int) and n >= 0 for n in entry):
+                return None
+            start, end, done = entry
+            if start > end or done > end - start + 1:
+                return None
+            segments.append(_Segment(start, end, done))
+        return segments if _covers(segments, total) else None
+
+    # Pre-stealing plan: equal spans, so the cut has to match to line up.
+    if plan.get("connections") != connections:
         return None
     done = plan.get("done")
     if not isinstance(done, list) or len(done) != connections:
         return None
     if not all(isinstance(n, int) and n >= 0 for n in done):
         return None
-    return done
+    spans = _segments(total, connections)
+    done = done[: len(spans)] + [0] * max(0, len(spans) - len(done))
+    segments = [_Segment(s, e, d) for (s, e), d in zip(spans, done, strict=True)]
+    if any(s.done > s.end - s.start + 1 for s in segments):
+        return None
+    return segments
 
 
-def _save_plan(part: str, total: int, connections: int, done: list[int]) -> None:
+def _save_plan(
+    part: str, total: int, connections: int, segments: list[_Segment]
+) -> None:
+    """Record the spans so an interrupted transfer can pick them up again.
+
+    Only the explicit form is written. A build older than work stealing finds
+    no "done" key, treats the plan as unusable and starts the file over --
+    which costs a restart rather than assembling the file from wrong offsets.
+    """
     try:
         with open(_plan_path(part), "w", encoding="utf-8") as handle:
-            json.dump({"total": total, "connections": connections, "done": done}, handle)
+            json.dump(
+                {
+                    "total": total,
+                    "connections": connections,
+                    "segments": [[s.start, s.end, s.done] for s in segments],
+                },
+                handle,
+            )
     except OSError:
         pass  # A lost plan costs a restart, not correctness.
 
@@ -274,21 +378,20 @@ def _fetch_segment(
     headers: dict[str, str],
     timeout: int,
     part: str,
-    start: int,
-    end: int,
-    done: list[int],
-    index: int,
+    segment: _Segment,
+    sniff: bool,
     cancel: threading.Event | None,
     failures: list[BaseException],
-) -> None:
+) -> bool:
+    """Fetch one span to its end. False means the failure has been recorded."""
     for attempt in range(MAX_ATTEMPTS):
-        begin = start + done[index]
-        if begin > end:
-            return
         if cancel is not None and cancel.is_set():
-            return
+            return False
+        if segment.remaining <= 0:
+            return True
+        begin, stop = segment.cursor, segment.end
         try:
-            ranged = {**headers, "Range": f"bytes={begin}-{end}"}
+            ranged = {**headers, "Range": f"bytes={begin}-{stop}"}
             response = _open_stream(session, file, ranged, timeout)
             with response:
                 if response.status_code != _RANGED:
@@ -296,26 +399,78 @@ def _fetch_segment(
                         f"{file.filename}: expected 206 for a range, got "
                         f"{response.status_code}"
                     )
-                if index == 0:
+                if sniff:
                     # One segment has to carry the sniff the probe could not do.
                     _reject_textual_body(response, file.filename)
                 # Every worker holds its own handle and only ever writes inside
                 # its own span, so no locking is needed around the file.
                 with open(part, "r+b") as handle:
                     handle.seek(begin)
+                    cursor = begin
                     for chunk in _iter_body(response):
                         if cancel is not None and cancel.is_set():
-                            return
+                            return False
                         if not chunk:
                             continue
+                        # Re-read the bound every chunk: another worker may have
+                        # taken this span's tail while the body was streaming,
+                        # and writing past it would double-count those bytes.
+                        stop = segment.end
+                        if cursor > stop:
+                            break
+                        if cursor + len(chunk) > stop + 1:
+                            chunk = chunk[: stop + 1 - cursor]
                         handle.write(chunk)
-                        done[index] += len(chunk)
-            return
+                        cursor += len(chunk)
+                        segment.done += len(chunk)
+                        # A steal can land between reading the bound above and
+                        # writing here. The bytes are identical either way --
+                        # both workers write the same file content -- but
+                        # counting them twice would overshoot the total, so the
+                        # tally is clamped to the span rather than trusted.
+                        span = segment.end - segment.start + 1
+                        if segment.done >= span:
+                            segment.done = span
+                            break
+                        if cursor > stop:
+                            break
+            if segment.remaining <= 0:
+                return True
+            # A body that stopped short: go round again from the new cursor.
         except (requests.RequestException, DownloadFailed, OSError) as exc:
             if attempt + 1 >= MAX_ATTEMPTS:
                 failures.append(exc)
-                return
+                return False
             time.sleep(min(16.0, 2.0**attempt))
+    failures.append(
+        DownloadFailed(f"{file.filename}: a segment never finished")
+    )
+    return False
+
+
+def _work(
+    session: requests.Session,
+    file: RemoteFile,
+    headers: dict[str, str],
+    timeout: int,
+    part: str,
+    segment: _Segment,
+    pending: list[_Segment],
+    segments: list[_Segment],
+    lock: threading.Lock,
+    sniff: bool,
+    cancel: threading.Event | None,
+    failures: list[BaseException],
+) -> None:
+    """Keep fetching spans until there is no worthwhile work left to take."""
+    current: _Segment | None = segment
+    while current is not None:
+        if not _fetch_segment(
+            session, file, headers, timeout, part, current, sniff, cancel, failures
+        ):
+            return
+        sniff = False
+        current = _take_work(pending, segments, lock)
 
 
 def _download_parallel(
@@ -341,26 +496,30 @@ def _download_parallel(
     if not total:
         return None
 
-    done = _load_plan(part, total, connections) or []
-    if not done or not os.path.isfile(part) or os.path.getsize(part) != total:
+    segments = _load_plan(part, total, connections)
+    if segments is None or not os.path.isfile(part) or os.path.getsize(part) != total:
         # Preallocate so every worker can seek straight to its own slot.
         with open(part, "wb") as handle:
             handle.truncate(total)
-        done = [0] * connections
+        segments = [_Segment(start, end) for start, end in _segments(total, connections)]
 
-    spans = _segments(total, connections)
-    done = done[: len(spans)] + [0] * max(0, len(spans) - len(done))
+    lock = threading.Lock()
     failures: list[BaseException] = []
+    # Reversed so pop() hands out the earliest span first; a resumed plan can
+    # hold more spans than we run workers, and the extras wait here.
+    pending = [s for s in reversed(segments) if s.remaining > 0]
 
-    workers = [
-        threading.Thread(
-            target=_fetch_segment,
-            args=(session, file, headers, timeout, part, start, end,
-                  done, index, cancel, failures),
-            daemon=True,
+    workers = []
+    for _ in range(min(connections, len(pending))):
+        segment = pending.pop()
+        workers.append(
+            threading.Thread(
+                target=_work,
+                args=(session, file, headers, timeout, part, segment, pending,
+                      segments, lock, segment.start == 0, cancel, failures),
+                daemon=True,
+            )
         )
-        for index, (start, end) in enumerate(spans)
-    ]
     for worker in workers:
         worker.start()
 
@@ -369,13 +528,16 @@ def _download_parallel(
     try:
         while any(worker.is_alive() for worker in workers):
             time.sleep(0.25)
+            # Snapshot under the lock: a worker may append a stolen span.
+            with lock:
+                current = list(segments)
             if progress is not None:
-                progress(sum(done), total)
-            _save_plan(part, total, connections, done)
+                progress(sum(s.done for s in current), total)
+            _save_plan(part, total, connections, current)
     finally:
         for worker in workers:
             worker.join()
-        _save_plan(part, total, connections, done)
+        _save_plan(part, total, connections, segments)
 
     if cancel is not None and cancel.is_set():
         if not keep_partial_on_cancel:
@@ -385,9 +547,10 @@ def _download_parallel(
 
     if failures:
         raise DownloadFailed(f"could not download {file.filename}: {failures[0]}")
-    if sum(done) != total:
+    fetched = sum(s.done for s in segments)
+    if fetched != total:
         raise DownloadFailed(
-            f"{file.filename} ended early ({sum(done)} of {total} bytes)"
+            f"{file.filename} ended early ({fetched} of {total} bytes)"
         )
 
     if progress is not None:
