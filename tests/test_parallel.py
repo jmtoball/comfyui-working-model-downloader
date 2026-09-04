@@ -21,6 +21,8 @@ from wmd import download
 from wmd.errors import AuthRequired, DownloadFailed
 from wmd.models import RemoteFile
 
+MIN = download.MIN_STEAL
+
 URL = "https://huggingface.co/org/repo/resolve/main/big.safetensors"
 # Comfortably over PARALLEL_MIN_SIZE so the parallel path is actually taken.
 BIG = bytes(range(256)) * (download.PARALLEL_MIN_SIZE // 256 + 4096)
@@ -116,8 +118,9 @@ def test_an_interrupted_parallel_download_resumes_from_its_plan(dest, parallel_c
         handle.truncate(len(BIG))
         handle.seek(0)
         handle.write(BIG[spans[0][0] : spans[0][1] + 1])
-    done = [spans[0][1] - spans[0][0] + 1] + [0] * (len(spans) - 1)
-    download._save_plan(part, len(BIG), connections, done)
+    segments = [download._Segment(start, end) for start, end in spans]
+    segments[0].done = spans[0][1] - spans[0][0] + 1
+    download._save_plan(part, len(BIG), connections, segments)
 
     seen = serve_ranges()
     outcome = download.download(make_file(), dest, cfg=parallel_cfg)
@@ -136,7 +139,8 @@ def test_a_stale_plan_is_ignored_rather_than_trusted(dest, parallel_cfg):
     part = dest + ".part"
     with open(part, "wb") as handle:
         handle.truncate(len(BIG))
-    download._save_plan(part, len(BIG) + 999, 2, [10, 20])
+    stale = [download._Segment(0, 9, 10), download._Segment(10, 29, 20)]
+    download._save_plan(part, len(BIG) + 999, 2, stale)
 
     serve_ranges()
     outcome = download.download(make_file(), dest, cfg=parallel_cfg)
@@ -241,3 +245,106 @@ def test_an_error_page_served_to_a_segment_is_still_caught(dest, parallel_cfg):
     responses.add_callback(responses.GET, URL, callback=handler)
     with pytest.raises(DownloadFailed, match="web page"):
         download.download(make_file(), dest, cfg=parallel_cfg)
+
+
+def test_a_finished_worker_takes_half_of_the_longest_remaining_span(monkeypatch):
+    """The point of the whole exercise: no connection idles while another crawls."""
+    monkeypatch.setattr(download, "MIN_STEAL", 1024)
+    segments = [
+        download._Segment(0, 999, 1000),        # finished
+        download._Segment(1000, 1999, 900),     # nearly finished
+        download._Segment(2000, 9999, 0),       # the laggard
+    ]
+    stolen = download._take_work([], segments, threading.Lock())
+
+    assert stolen is not None
+    laggard = segments[2]
+    # The tail was split down the middle, and the two halves still tile it.
+    assert laggard.end + 1 == stolen.start
+    assert stolen.end == 9999
+    assert stolen.start - laggard.cursor == pytest.approx(stolen.remaining, abs=1)
+    assert download._covers(segments, 10000)
+
+
+def test_a_span_too_small_to_be_worth_splitting_is_left_alone():
+    """Below the floor a second connection costs more than it returns."""
+    segments = [download._Segment(0, MIN - 1, MIN), download._Segment(MIN, 2 * MIN - 1, 0)]
+    assert download._take_work([], segments, threading.Lock()) is None
+
+
+def test_unclaimed_spans_are_handed_out_before_anything_is_split():
+    """A resumed plan can hold more spans than we run workers."""
+    waiting = download._Segment(5000, 9999, 0)
+    segments = [download._Segment(0, 4999, 0), waiting]
+    assert download._take_work([waiting], segments, threading.Lock()) is waiting
+
+
+def test_a_finished_unclaimed_span_is_skipped_not_handed_out():
+    finished = download._Segment(0, 999, 1000)
+    live = download._Segment(1000, 1999, 0)
+    segments = [finished, live]
+    assert download._take_work([live, finished], segments, threading.Lock()) is live
+
+
+def test_spans_that_do_not_tile_the_file_are_rejected():
+    """A plan with a gap or an overlap would assemble the file wrongly."""
+    assert download._covers([download._Segment(0, 9), download._Segment(10, 19)], 20)
+    assert not download._covers([download._Segment(0, 9), download._Segment(11, 19)], 20)
+    assert not download._covers([download._Segment(0, 10), download._Segment(10, 19)], 20)
+    assert not download._covers([download._Segment(0, 9)], 20)
+
+
+@responses.activate
+def test_a_plan_of_unequal_spans_resumes_where_stealing_left_off(dest, parallel_cfg):
+    """Once work has been stolen the spans are no longer quarters, and the plan
+    has to describe them explicitly or the rest lands at the wrong offsets."""
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    part = dest + ".part"
+    cut = len(BIG) // 3
+    with open(part, "wb") as handle:
+        handle.truncate(len(BIG))
+        handle.write(BIG[:cut])
+    segments = [
+        download._Segment(0, cut - 1, cut),          # done
+        download._Segment(cut, len(BIG) - 1, 0),     # the stolen remainder
+    ]
+    download._save_plan(part, len(BIG), parallel_cfg.prefs.download_connections, segments)
+
+    seen = serve_ranges()
+    outcome = download.download(make_file(), dest, cfg=parallel_cfg)
+
+    assert open(dest, "rb").read() == BIG
+    assert outcome.verified
+    # Probe, then only the unfinished span -- the first third is not refetched.
+    assert len(seen) == 2
+
+
+@responses.activate
+def test_stealing_never_double_counts_a_byte(dest, parallel_cfg, monkeypatch):
+    """With the floor dropped, workers steal aggressively; the file must still
+    assemble exactly once, with every byte accounted for."""
+    monkeypatch.setattr(download, "MIN_STEAL", 4096)
+    serve_ranges()
+    outcome = download.download(make_file(), dest, cfg=parallel_cfg)
+
+    assert open(dest, "rb").read() == BIG
+    assert outcome.verified
+    assert not os.path.exists(dest + ".part.plan")
+
+
+@responses.activate
+def test_an_old_plan_without_explicit_spans_still_loads(dest, parallel_cfg):
+    """Plans written before stealing imply equal spans from the count."""
+    part = dest + ".part"
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    connections = parallel_cfg.prefs.download_connections
+    spans = download._segments(len(BIG), connections)
+    first = spans[0][1] - spans[0][0] + 1
+    with open(part + ".plan", "w", encoding="utf-8") as handle:
+        json.dump({"total": len(BIG), "connections": connections,
+                   "done": [first] + [0] * (len(spans) - 1)}, handle)
+
+    loaded = download._load_plan(part, len(BIG), connections)
+    assert loaded is not None
+    assert [(s.start, s.end, s.done) for s in loaded][0] == (spans[0][0], spans[0][1], first)
+    assert download._covers(loaded, len(BIG))
