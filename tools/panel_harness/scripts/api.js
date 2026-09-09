@@ -72,6 +72,7 @@ const queued = new Map();
 // Real listener plumbing: the panel's handling of pushed progress is where a
 // job belonging to another workflow can leak in, so tests must be able to fire one.
 const listeners = new Map();
+window.__listenerCount = (type) => (listeners.get(type) || []).length;
 window.__emit = (type, detail) => {
   for (const fn of listeners.get(type) || []) fn({ detail });
 };
@@ -79,6 +80,11 @@ window.__emit = (type, detail) => {
 export const api = {
   addEventListener(type, fn) {
     listeners.set(type, [...(listeners.get(type) || []), fn]);
+  },
+  // ComfyUI's api extends EventTarget, so it has this. Without it here the
+  // harness would happily hide a listener that is never detached.
+  removeEventListener(type, fn) {
+    listeners.set(type, (listeners.get(type) || []).filter((each) => each !== fn));
   },
   async fetchApi(path, options = {}) {
     const body = options.body ? JSON.parse(options.body) : {};

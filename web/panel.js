@@ -170,10 +170,24 @@ class Panel {
     this.loadConfig();
     this.renderResults();
     this.refreshJobs();
-    api.addEventListener("wmd.progress", (event) => this.onJobEvent(event.detail));
+    this.onProgress = (event) => this.onJobEvent(event.detail);
+    api.addEventListener("wmd.progress", this.onProgress);
     // ComfyUI gives no reliable cross-version event for switching workflows, and
     // comparing one string every couple of seconds costs nothing.
     this.watch = setInterval(() => this.syncWorkflow(), 2000);
+  }
+
+  /**
+   * Detach from the page.
+   *
+   * ComfyUI calls a sidebar tab's render() again whenever it remounts the tab,
+   * so without this each remount leaves behind a timer still polling and a
+   * socket listener still writing into a panel nobody can see.
+   */
+  destroy() {
+    clearInterval(this.watch);
+    clearTimeout(this.polling);
+    api.removeEventListener?.("wmd.progress", this.onProgress);
   }
 
   /** Follow the user between workflows, carrying each one's state with it. */
@@ -197,6 +211,7 @@ class Panel {
 
   build() {
     this.root.classList.add("wmd-panel");
+    this.root.replaceChildren();
 
     this.status = el("div", { className: "wmd-status" });
 
@@ -716,7 +731,10 @@ app.registerExtension({
       tooltip: "Find and download the models this workflow needs",
       type: "custom",
       render: (element) => {
-        new Panel(element);
+        // render() runs again on every remount. Replace the previous panel
+        // rather than stacking a second copy of the whole UI on top of it.
+        element.__wmdPanel?.destroy();
+        element.__wmdPanel = new Panel(element);
       },
     });
   },
