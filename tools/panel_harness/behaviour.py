@@ -157,7 +157,31 @@ def main() -> int:
               f"{before_finish} -> {on_disk_rows()}")
         again.close()
 
-        # 6. Pushed progress for another workflow's download must not leak in.
+        # 6. Remounting the tab replaces the panel instead of stacking another.
+        remount = context.new_page()
+        mount(remount, base, workflow="workflows/remount.json", items=4, jobs=2)
+        remount.wait_for_timeout(400)
+        remount.evaluate("() => window.__tab.render(document.getElementById('sidebar'))")
+        remount.wait_for_timeout(400)
+        copies = remount.evaluate("""() => ({
+          scan: [...document.querySelectorAll('button')]
+            .filter(b => b.textContent === 'Scan workflow').length,
+          models: [...document.querySelectorAll('h4')]
+            .filter(h => h.textContent === 'Models').length,
+          settings: document.querySelectorAll('.wmd-panel > details').length,
+        })""")
+        check("a remount renders one panel, not two",
+              set(copies.values()) == {1}, str(copies))
+
+        # The replaced panel must also stop listening, or one pushed update
+        # renders twice and its timer keeps polling for a panel nobody can see.
+        listeners = remount.evaluate(
+            "() => window.__listenerCount ? window.__listenerCount('wmd.progress') : -1"
+        )
+        check("the replaced panel stops listening", listeners == 1, f"{listeners} listeners")
+        remount.close()
+
+        # 7. Pushed progress for another workflow's download must not leak in.
         leak = context.new_page()
         mount(leak, base, workflow="workflows/mine.json", items=4, jobs=0)
         leak.wait_for_timeout(400)
@@ -191,7 +215,7 @@ def main() -> int:
               "queued.safetensors" in queue_text())
         leak.close()
 
-        # 7. A second workflow starts clean and does not inherit the first's queue.
+        # 8. A second workflow starts clean and does not inherit the first's queue.
         page.evaluate("window.__noneMissing = false")
         second = context.new_page()
         mount(second, base, workflow="workflows/two.json", items=5, jobs=0)
@@ -203,14 +227,14 @@ def main() -> int:
         check("a different workflow starts with no resolutions", rows == 0, f"{rows} rows")
         check("and with no queue from the previous one", "No downloads yet." in queue)
 
-        # 8. Reopening the first workflow restores what it had.
+        # 9. Reopening the first workflow restores what it had.
         third = context.new_page()
         mount(third, base, workflow="workflows/one.json", items=8, jobs=0)
         third.wait_for_timeout(600)
         restored = third.eval_on_selector_all(".wmd-item", "els => els.length")
         check("reopening a workflow restores its resolutions", restored > 0, f"{restored} rows")
 
-        # 9. The clear button is offered only when something can be cleared.
+        # 10. The clear button is offered only when something can be cleared.
         fourth = context.new_page()
         mount(fourth, base, workflow="workflows/three.json", items=4, jobs=0)
         fourth.wait_for_timeout(400)
